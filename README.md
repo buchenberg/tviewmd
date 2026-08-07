@@ -41,8 +41,12 @@ import (
 )
 
 func main() {
+    app := tview.NewApplication()
     tv := tview.NewTextView().SetWrap(true)
     fmt.Fprint(tv, tviewmd.Render("# Hello\n\nSome **bold** and `code`.", tviewmd.Options{}))
+    if err := app.SetRoot(tv, true).Run(); err != nil {
+        panic(err)
+    }
 }
 ```
 
@@ -66,53 +70,37 @@ textView.SetText(output)
 ### Complete Markdown Features
 
 ```go
-markdown := `# Title
-
-## Subtitle
-
-This is a paragraph with **bold**, *italic*, ~~strikethrough~~, and `inline code`.
-
-### Code Block
-
-\`\`\`go
-func main() {
-    fmt.Println("Hello, World!")
-}
-\`\`\`
-
-### List
-
-- Item 1
-- Item 2
-  - Nested item
-- Item 3
-
-### Table
-
-| Column 1 | Column 2 |
-|----------|----------|
-| Row 1    | Data     |
-| Row 2    | More     |
-
-### Blockquote
-
-> This is a blockquote
-
-### Link
-
-[GitHub](https://github.com)
-
-### Thematic Break
-
----
-
-### Task List
-
-- [x] Task 1 (completed)
-- [ ] Task 2 (pending)
-`
+markdown := "# Title\n\n" +
+    "## Subtitle\n\n" +
+    "This is a paragraph with **bold**, *italic*, ~~strikethrough~~, and `inline code`.\n\n" +
+    "### Code Block\n\n" +
+    "```go\n" +
+    "func main() {\n" +
+    "    fmt.Println(\"Hello, World!\")\n" +
+    "}\n" +
+    "```\n\n" +
+    "### List\n\n" +
+    "- Item 1\n" +
+    "- Item 2\n" +
+    "  - Nested item\n" +
+    "- Item 3\n\n" +
+    "### Table\n\n" +
+    "| Column 1 | Column 2 |\n" +
+    "|----------|----------|\n" +
+    "| Row 1    | Data     |\n" +
+    "| Row 2    | More     |\n\n" +
+    "### Blockquote\n\n" +
+    "> This is a blockquote\n\n" +
+    "### Link\n\n" +
+    "[GitHub](https://github.com)\n\n" +
+    "### Thematic Break\n\n" +
+    "---\n\n" +
+    "### Task List\n\n" +
+    "- [x] Task 1 (completed)\n" +
+    "- [ ] Task 2 (pending)"
 
 textView.SetText(tviewmd.Render(markdown, tviewmd.Options{}))
+```
 ```
 
 ### With Custom Theme
@@ -140,7 +128,7 @@ output := tviewmd.Render(markdown, tviewmd.Options{
 For real-time rendering of streaming LLM responses:
 
 ```go
-func renderLLMStream(stream <-chan []byte, textView *tview.TextView) {
+func renderLLMStream(app *tview.Application, stream <-chan []byte, textView *tview.TextView) {
     var buf strings.Builder
     throttle := time.Tick(50 * time.Millisecond) // Adjust throttle as needed
 
@@ -149,13 +137,17 @@ func renderLLMStream(stream <-chan []byte, textView *tview.TextView) {
         case chunk, ok := <-stream:
             if !ok {
                 // Stream ended - final render
-                textView.SetText(tviewmd.Render(buf.String(), tviewmd.Options{}))
+                app.QueueUpdateDraw(func() {
+                    textView.SetText(tviewmd.Render(buf.String(), tviewmd.Options{}))
+                })
                 return
             }
             buf.Write(chunk)
         case <-throttle:
             // Throttled re-render for smooth updates
-            textView.SetText(tviewmd.Render(buf.String(), tviewmd.Options{}))
+            app.QueueUpdateDraw(func() {
+                textView.SetText(tviewmd.Render(buf.String(), tviewmd.Options{}))
+            })
         }
     }
 }
@@ -184,8 +176,10 @@ func demoStreaming() {
         close(stream)
     }()
 
-    renderLLMStream(stream, textView)
+    // Run renderer in a goroutine
+    go renderLLMStream(app, stream, textView)
     
+    // Start the application
     if err := app.SetRoot(textView, true).Run(); err != nil {
         panic(err)
     }
@@ -221,6 +215,8 @@ For advanced use cases where you want to inspect or transform the parsed structu
 blocks, err := tviewmd.Parse(markdown)
 if err != nil {
     // Handle error (Parse never returns error for valid markdown)
+    log.Fatal(err)
+    return
 }
 
 // Inspect or transform blocks...
@@ -354,16 +350,6 @@ type Style struct {
 The `[]Block` / `Segment` model is the real deliverable: a curated terminal-oriented
 markdown vocabulary, smaller and friendlier than goldmark's full AST.
 
-- **Parser**: [`goldmark`](https://github.com/yuin/goldmark) (CommonMark + GFM) —
-  correct parsing for free.
-- **Code highlighting**: [`chroma`](https://github.com/alecthomas/chroma)
-  `terminal256` formatter, translated to tview tags.
-- **Layered core**: `Parse` → `[]Block` (renderer-neutral) → `RenderTView`. A
-  future `RenderANSI` / plain backend can reuse the same `[]Block`.
-
-The `[]Block` / `Segment` model is the real deliverable: a curated terminal-oriented
-markdown vocabulary, smaller and friendlier than goldmark's full AST.
-
 ## Comparison with Alternatives
 
 | Approach | Pros | Cons |
@@ -448,8 +434,8 @@ Ensure you're using valid CommonMark + GFM syntax:
 // ✅ Valid GFM table
 markdown := "| A | B |\n|---|---|\n| 1 | 2 |"
 
-// ❌ Invalid (missing pipe separators)
-markdown := "| A | B |\n|---|---|\n1 | 2"  // Missing pipes in data row
+// ❌ Invalid (missing separator row)
+markdown := "| A | B |\n| 1 | 2 |"  // No separator row between header and data
 ```
 
 #### Performance issues with large documents
@@ -508,9 +494,7 @@ make build   # Build project
 
 ## Status
 
-In-tree development under the `yaah` repository (`md/`), extracted via a Go
-workspace. When the test bar is met it lifts to its own repo with zero import
-rewrites (the module path is already `github.com/buchenberg/tviewmd`).
+tviewmd is a standalone, production-ready library at `github.com/buchenberg/tviewmd`.
 
 ## Testing
 

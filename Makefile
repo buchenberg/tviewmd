@@ -1,6 +1,6 @@
 # Makefile for tviewmd
 
-.PHONY: all test lint build clean coverage fuzz release
+.PHONY: all test lint build clean coverage fuzz release mod-tidy install-linter check help
 
 # Go parameters
 GOCMD=go
@@ -17,7 +17,6 @@ all: test lint build
 
 test: 
 	$(GOTEST) -v -race ./...
-	test -v -race ./...
 
 # Run tests with coverage
 coverage:

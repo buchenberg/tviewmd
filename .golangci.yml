@@ -1,4 +1,4 @@
-runner:
+run:
   timeout: 5m
   concurrency: 4
   issues-exit-code: 1
@@ -37,7 +37,6 @@ linters:
     - gocyclo
     - godot
     - goerr113
-    - ifshort
     - importas
     - lll
     - makezero
@@ -100,4 +99,4 @@ issues:
   exclude-rules:
     - linters:
         - lll
-      source: "^//go:generate" }
+      source: "^//go:generate"

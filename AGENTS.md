@@ -23,7 +23,7 @@ This file contains configuration and instructions for Mistral Vibe when working 
 - **Coverage**: Use `go test -coverprofile=coverage.out -covermode=atomic`
 
 ### Build
-- **Go Version**: 1.24+ (1.25 recommended)
+- **Go Version**: 1.25.8+
 - **Module Path**: `github.com/buchenberg/tviewmd`
 - **Build Command**: `go build -v ./...`
 
@@ -122,10 +122,12 @@ git push origin feature/name
 
 ## Security
 
-### Dependency Scanning
-- Regularly run `go mod tidy`
-- Check for vulnerabilities with `govulncheck`
-- Keep dependencies updated
+### Dependency Maintenance
+- Regularly run `go mod tidy` to synchronize dependencies
+- Keep dependencies updated to latest stable versions
+
+### Vulnerability Scanning
+- Check for vulnerabilities with `govulncheck ./...`
 
 ### Secret Scanning
 - Never commit API keys, tokens, or credentials
@@ -173,7 +175,7 @@ func Render(src string, opts Options) string {
 
 ## File Structure
 
-```
+```text
 tviewmd/
 ├── .github/
 │   └── workflows/
