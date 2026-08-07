@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted** 
+**Proposed** 
 
 ## Context
 
@@ -137,4 +137,4 @@ Future incremental parser implementation should:
 
 *Created: 2026-08-07*  
 *Last Updated: 2026-08-07*  
-*Status: Accepted*
+*Status: Proposed*

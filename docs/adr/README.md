@@ -72,7 +72,7 @@ ADRs are numbered sequentially with 4-digit numbers (0001, 0002, etc.).
 
 | Number | Title | Status | Date |
 |--------|-------|--------|------|
-| [0001](0001-streaming-support.md) | Streaming Markdown Rendering for LLM Responses | Accepted | 2026-08-07 |
+| [0001](0001-streaming-support.md) | Streaming Markdown Rendering for LLM Responses | Proposed | 2026-08-07 |
 
 ## Creating a New ADR
 
