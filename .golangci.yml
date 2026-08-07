@@ -14,7 +14,6 @@ linters:
     - errcheck
     - gofmt
     - goimports
-    - golint
     - gosec
     - gosimple
     - govet
@@ -29,7 +28,6 @@ linters:
     - errorlint
     - exhaustive
     - exportloopref
-    - forbidigo
     - funlen
     - gci
     - gochecknoinits
@@ -50,7 +48,6 @@ linters:
     - noctx
     - nolintlint
     - prealloc
-    - promlinter
     - revive
     - rowserrcheck
     - sqlclosecheck
