@@ -29,14 +29,11 @@ func DefaultTheme() Theme {
 	}
 }
 
-// Options configure rendering. The zero value renders with the default theme,
-// syntax highlighting enabled, and an 80-column width for rules and tables.
+// Options configure rendering. The zero value renders with the default theme
+// and an 80-column width for rules and tables.
 type Options struct {
 	// Width is used for horizontal-rule length and table column sizing. 0 = 80.
 	Width int
-
-	// NoHighlight disables chroma syntax highlighting for fenced code blocks.
-	NoHighlight bool
 
 	// Theme is the color theme. The zero value uses DefaultTheme().
 	Theme Theme
@@ -44,6 +41,11 @@ type Options struct {
 
 // Render parses src and renders it to tview color-tagged text. It is the
 // convenience entry point for callers that do not need the intermediate []Block.
+//
+// Render is safe to call on each streaming update: it fully re-renders the
+// accumulated buffer and escapes literal brackets, so incremental re-rendering
+// never produces unbalanced or injected tview tags. For a buffered streaming
+// accumulator see Renderer.
 func Render(src string, opts Options) string {
 	blocks, err := Parse(src)
 	if err != nil || len(blocks) == 0 {
