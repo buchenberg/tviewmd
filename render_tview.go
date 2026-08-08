@@ -239,8 +239,9 @@ func tag(fg, bg, flags string) string {
 	return fmt.Sprintf("[%s:%s:%s]", fg, bg, flags)
 }
 
-// closeTag resets all style attributes.
-func closeTag() string { return "[-]" }
+// closeTag resets all style attributes including flags (bold/underline/italic).
+// tview's [-] only resets foreground — [-:-:-] is needed to clear flags too.
+func closeTag() string { return "[-:-:-]" }
 
 func flagsOf(s Style) string {
 	var f strings.Builder
