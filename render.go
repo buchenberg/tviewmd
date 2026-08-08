@@ -1,5 +1,7 @@
 package tviewmd
 
+import "strings"
+
 // Theme holds the color scheme used by renderers. Colors are expressed in any
 // form the target backend understands (tview accepts named colors like "red",
 // hex like "#ff8c42", and "default").
@@ -50,4 +52,33 @@ func Render(src string, opts Options) string {
 		return src
 	}
 	return RenderTView(blocks, opts)
+}
+
+// RenderPartial renders src for use during live streaming. Complete lines
+// (terminated by \n) are passed through goldmark; the last incomplete line
+// is appended as bracket-escaped raw text so tview's SetDynamicColors does
+// not consume markdown link syntax or inline code brackets.
+//
+// When the stream flushes, call Render on the full text to replace the
+// partial output with properly formatted content.
+func RenderPartial(src string, opts Options) string {
+	lastNL := strings.LastIndex(src, "\n")
+	if lastNL < 0 {
+		return escapeBrackets(src)
+	}
+	complete := src[:lastNL]
+	pending := src[lastNL+1:]
+
+	rendered := Render(complete, opts)
+	if pending == "" {
+		return rendered
+	}
+	if rendered == "" {
+		return escapeBrackets(pending)
+	}
+	return rendered + "\n" + escapeBrackets(pending)
+}
+
+func escapeBrackets(s string) string {
+	return strings.ReplaceAll(s, "[", "[[]")
 }

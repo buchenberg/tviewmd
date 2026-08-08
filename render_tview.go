@@ -3,7 +3,8 @@ package tviewmd
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // RenderTView renders parsed blocks to tview color-tagged text suitable for a
@@ -185,7 +186,7 @@ func tableCols(t TableData) int {
 func cellPlainWidth(c TableCell) int {
 	n := 0
 	for _, s := range c.Segments {
-		n += utf8.RuneCountInString(s.Text)
+		n += runewidth.StringWidth(s.Text)
 	}
 	return n
 }
