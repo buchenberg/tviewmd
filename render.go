@@ -1,7 +1,5 @@
 package tviewmd
 
-import "strings"
-
 // Theme holds the color scheme used by renderers. Colors are expressed in any
 // form the target backend understands (tview accepts named colors like "red",
 // hex like "#ff8c42", and "default").
@@ -31,14 +29,11 @@ func DefaultTheme() Theme {
 	}
 }
 
-// Options configure rendering. The zero value renders with the default theme,
-// syntax highlighting enabled, and an 80-column width for rules and tables.
+// Options configure rendering. The zero value renders with the default theme
+// and an 80-column width for rules and tables.
 type Options struct {
 	// Width is used for horizontal-rule length and table column sizing. 0 = 80.
 	Width int
-
-	// NoHighlight disables chroma syntax highlighting for fenced code blocks.
-	NoHighlight bool
 
 	// Theme is the color theme. The zero value uses DefaultTheme().
 	Theme Theme
@@ -46,39 +41,15 @@ type Options struct {
 
 // Render parses src and renders it to tview color-tagged text. It is the
 // convenience entry point for callers that do not need the intermediate []Block.
+//
+// Render is safe to call on each streaming update: it fully re-renders the
+// accumulated buffer and escapes literal brackets, so incremental re-rendering
+// never produces unbalanced or injected tview tags. For a buffered streaming
+// accumulator see Renderer.
 func Render(src string, opts Options) string {
 	blocks, err := Parse(src)
 	if err != nil || len(blocks) == 0 {
 		return src
 	}
 	return RenderTView(blocks, opts)
-}
-
-// RenderPartial renders src for use during live streaming. Complete lines
-// (terminated by \n) are passed through goldmark; the last incomplete line
-// is appended as bracket-escaped raw text so tview's SetDynamicColors does
-// not consume markdown link syntax or inline code brackets.
-//
-// When the stream flushes, call Render on the full text to replace the
-// partial output with properly formatted content.
-func RenderPartial(src string, opts Options) string {
-	lastNL := strings.LastIndex(src, "\n")
-	if lastNL < 0 {
-		return escapeBrackets(src)
-	}
-	complete := src[:lastNL]
-	pending := src[lastNL+1:]
-
-	rendered := Render(complete, opts)
-	if pending == "" {
-		return rendered
-	}
-	if rendered == "" {
-		return escapeBrackets(pending)
-	}
-	return rendered + "\n" + escapeBrackets(pending)
-}
-
-func escapeBrackets(s string) string {
-	return strings.ReplaceAll(s, "[", "[[]")
 }

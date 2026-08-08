@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/rivo/tview"
 )
 
 // RenderTView renders parsed blocks to tview color-tagged text suitable for a
@@ -82,11 +83,7 @@ func renderList(b *strings.Builder, items []ListItem, opts Options, depth int) {
 
 func renderCode(cb CodeBlock, opts Options) string {
 	source := strings.TrimRight(cb.Source, "\n")
-	fg := opts.Theme.CodeBlockFG
-	if cb.Lang != "" && !opts.NoHighlight {
-		return highlightCode(cb.Lang, source, fg)
-	}
-	return tag(fg, "", "") + source + closeTag()
+	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(source) + closeTag()
 }
 
 func renderTable(b *strings.Builder, t TableData, opts Options) {
@@ -108,7 +105,7 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 	// Header row (bold).
 	if len(t.Header) > 0 {
 		b.WriteString(tag("", "", "b"))
-		b.WriteString(renderTableRow(t.Header, widths))
+		b.WriteString(renderTableRow(t.Header, widths, opts))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	}
@@ -130,7 +127,7 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 				padded[i] = row[i]
 			}
 		}
-		b.WriteString(renderTableRow(padded, widths))
+		b.WriteString(renderTableRow(padded, widths, opts))
 		b.WriteString("\n")
 	}
 }
@@ -138,13 +135,13 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 // renderTableRow emits one row as space-separated, padded cells. The visible
 // content is styled via renderSegments; padding is computed from the plain-text
 // width so color tags do not affect column alignment.
-func renderTableRow(cells []TableCell, widths []int) string {
+func renderTableRow(cells []TableCell, widths []int, opts Options) string {
 	var b strings.Builder
 	for i, c := range cells {
 		if i > 0 {
 			b.WriteString(" ")
 		}
-		content := renderSegments(c.Segments, Options{})
+		content := renderSegments(c.Segments, opts)
 		plainW := cellPlainWidth(c)
 		colW := 0
 		if i < len(widths) {
@@ -191,37 +188,63 @@ func cellPlainWidth(c TableCell) int {
 	return n
 }
 
-// renderSegments emits inline content for a block/cell. It accepts Options only
-// for theming of code spans and links within the run.
+// renderSegments emits inline content for a block/cell. Adjacent segments that
+// share the same treatment (link, code, style) are merged and their visible
+// text escaped as a single unit. Per-segment escaping is insufficient: goldmark
+// splits a failed link like "[red]boom" into "[", "red", "]boom", and tview
+// consumes a "[...]" tag shape across segment boundaries, so the full run must
+// be escaped together or the bracket pair would inject a style directive.
 func renderSegments(segs []Segment, opts Options) string {
 	var b strings.Builder
-	for _, s := range segs {
-		b.WriteString(renderSegment(s, opts))
+	for i := 0; i < len(segs); {
+		j := i
+		for j+1 < len(segs) && sameSegmentTreatment(segs[j], segs[j+1]) {
+			j++
+		}
+		b.WriteString(renderSegmentGroup(segs[i:j+1], opts))
+		i = j + 1
 	}
 	return b.String()
 }
 
-func renderSegment(s Segment, opts Options) string {
-	if s.Text == "" {
+// sameSegmentTreatment reports whether two segments render identically, so they
+// can be merged for escaping purposes.
+func sameSegmentTreatment(a, b Segment) bool {
+	return a.Link == b.Link && a.Code == b.Code && a.Style == b.Style
+}
+
+// renderSegmentGroup renders a run of same-styled segments. The visible text is
+// concatenated and passed through tview.Escape once, so tag-shaped bracket
+// spans are neutralized regardless of how goldmark split them. Only the tags
+// this function itself emits are left unescaped.
+func renderSegmentGroup(group []Segment, opts Options) string {
+	var tb strings.Builder
+	for _, s := range group {
+		tb.WriteString(s.Text)
+	}
+	raw := tb.String()
+	if raw == "" {
 		return ""
 	}
-	if s.Link != "" {
+	text := tview.Escape(raw)
+	s0 := group[0]
+	if s0.Link != "" {
 		col := opts.Theme.Link
 		if opts.Theme == (Theme{}) {
 			col = DefaultTheme().Link
 		}
-		if s.Text == s.Link {
-			return tag(col, "", "u") + s.Text + closeTag()
+		if raw == s0.Link {
+			return tag(col, "", "u") + text + closeTag()
 		}
-		return tag(col, "", "u") + s.Text + closeTag() + " " + tag(col, "", "") + "(" + s.Link + ")" + closeTag()
+		return tag(col, "", "u") + text + closeTag() + " " + tag(col, "", "") + "(" + tview.Escape(s0.Link) + ")" + closeTag()
 	}
-	if s.Code {
-		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + s.Text + closeTag()
+	if s0.Code {
+		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag()
 	}
-	if s.Style == (Style{}) {
-		return s.Text
+	if s0.Style == (Style{}) {
+		return text
 	}
-	return tag(s.Style.FG, s.Style.BG, flagsOf(s.Style)) + s.Text + closeTag()
+	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag()
 }
 
 // tag formats a tview color tag [fg:bg:flags]. Empty fields inherit the
@@ -231,9 +254,13 @@ func tag(fg, bg, flags string) string {
 	return fmt.Sprintf("[%s:%s:%s]", fg, bg, flags)
 }
 
-// closeTag resets all style attributes including flags (bold/underline/italic).
-// tview's [-] only resets foreground — [-:-:-] is needed to clear flags too.
-func closeTag() string { return "[-:-:-]" }
+// closeTag resets all style attributes including flags (bold/underline/italic)
+// and color. The trailing [::U] is required because tcell stores the underline
+// style in a separate field (Style.ulStyle) that tview's [-:-:-] reset does not
+// touch — without it, any underlined run (e.g. links) leaks its underline to
+// every cell rendered afterwards. [::U] maps to tcell's Underline(false), which
+// is the only tag that clears ulStyle back to UnderlineStyleNone.
+func closeTag() string { return "[-:-:-][::U]" }
 
 func flagsOf(s Style) string {
 	var f strings.Builder

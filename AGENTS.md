@@ -7,7 +7,7 @@ This file contains configuration and instructions for Mistral Vibe when working 
 - **Project**: tviewmd - Native markdown rendering for tview TextViews
 - **Language**: Go (Golang)
 - **Primary Use Case**: Rendering markdown in terminal applications
-- **Key Dependencies**: goldmark, chroma, tview
+- **Key Dependencies**: goldmark, tview
 
 ## Tooling
 

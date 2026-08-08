@@ -188,14 +188,6 @@ func demoStreaming() {
 
 ### Disable Syntax Highlighting
 
-For better performance when you don't need code syntax highlighting:
-
-```go
-output := tviewmd.Render(markdown, tviewmd.Options{
-    NoHighlight: true,
-})
-```
-
 ### Custom Width
 
 Set a custom width for horizontal rules and table sizing:
@@ -251,10 +243,7 @@ output := tviewmd.RenderTView(blocks, tviewmd.Options{})
 type Options struct {
     // Width for horizontal rules and table sizing (default: 80)
     Width int
-    
-    // Disable syntax highlighting for code blocks (default: false)
-    NoHighlight bool
-    
+
     // Custom color theme (default: DefaultTheme())
     Theme Theme
 }
@@ -342,8 +331,6 @@ type Style struct {
 
 - **Parser**: [`goldmark`](https://github.com/yuin/goldmark) (CommonMark + GFM) —
   correct parsing for free.
-- **Code highlighting**: [`chroma`](https://github.com/alecthomas/chroma)
-  `terminal256` formatter, translated to tview tags.
 - **Layered core**: `Parse` → `[]Block` (renderer-neutral) → `RenderTView`. A
   future `RenderANSI` / plain backend can reuse the same `[]Block`.
 
@@ -397,20 +384,11 @@ Make sure you've enabled wrapping on your TextView:
 textView := tview.NewTextView().SetWrap(true)  // ✅ Required
 ```
 
-#### Code blocks not syntax highlighted
+#### Code blocks not colored
 
-Check that:
-1. The code block uses fenced syntax (```language)
-2. Syntax highlighting is enabled (default: true)
-3. The language is supported by chroma
-
-```go
-// This works:
-tviewmd.Render("```go\nfunc main() {}\n```", tviewmd.Options{})
-
-// This doesn't (no language specified):
-tviewmd.Render("```\nfunc main() {}\n```", tviewmd.Options{})
-```
+Code blocks render with the `CodeBlockFG` theme color. If you expect
+syntax highlighting, note that chroma was removed in favor of a simpler,
+safer, and faster single-color approach.
 
 #### Colors not appearing
 
@@ -442,12 +420,7 @@ markdown := "| A | B |\n| 1 | 2 |"  // No separator row between header and data
 
 For large markdown documents (>10KB):
 
-1. **Disable syntax highlighting** if not needed:
-   ```go
-   tviewmd.Render(largeMarkdown, tviewmd.Options{NoHighlight: true})
-   ```
-
-2. **Throttle rendering** for streaming:
+1. **Throttle rendering** for streaming:
    ```go
    // Reduce throttle interval
    throttle := time.Tick(100 * time.Millisecond)  // Less frequent updates
