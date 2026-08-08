@@ -224,14 +224,23 @@ func renderSegment(s Segment, opts Options) string {
 	return tag(s.Style.FG, s.Style.BG, flagsOf(s.Style)) + s.Text + closeTag()
 }
 
-// tag formats a tview color tag [fg:bg:flags]. Empty fields are left blank so
-// tview inherits the surrounding style.
+// tag formats a tview color tag. Empty fields are omitted so the tag is
+// as compact as possible: [fg], [fg:bg], [fg::flags], [::b], etc.
 func tag(fg, bg, flags string) string {
+	if fg == "" && bg == "" && flags == "" {
+		return ""
+	}
+	if bg == "" && flags == "" {
+		return fmt.Sprintf("[%s]", fg)
+	}
+	if flags == "" {
+		return fmt.Sprintf("[%s:%s]", fg, bg)
+	}
 	return fmt.Sprintf("[%s:%s:%s]", fg, bg, flags)
 }
 
 // closeTag resets all style attributes.
-func closeTag() string { return "[-:-:-]" }
+func closeTag() string { return "[-]" }
 
 func flagsOf(s Style) string {
 	var f strings.Builder

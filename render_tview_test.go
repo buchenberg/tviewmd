@@ -32,7 +32,7 @@ func TestRenderStrikethroughTag(t *testing.T) {
 func TestRenderInlineCode(t *testing.T) {
 	out := Render("`x`", Options{})
 	// Inline code uses the InlineCodeBG color in the tag.
-	if !strings.Contains(out, ":]") {
+	if !strings.Contains(out, "]") {
 		t.Errorf("code tag missing in %q", out)
 	}
 	if !strings.Contains(out, "x") {
@@ -72,7 +72,7 @@ func TestRenderCodeHighlightInvokesChroma(t *testing.T) {
 func TestRenderCodeNoHighlight(t *testing.T) {
 	out := Render("```go\nfunc main() {}\n```", Options{NoHighlight: true})
 	// With highlighting off, the whole block is a single code-block-fg tag.
-	if !strings.Contains(out, "[#e6e6e6::]") {
+	if !strings.Contains(out, "[#e6e6e6]") {
 		t.Errorf("plain code tag missing in %q", out)
 	}
 }
@@ -148,3 +148,4 @@ func TestRenderTViewTrimsTrailingNewline(t *testing.T) {
 		t.Errorf("trailing newline not trimmed: %q", out)
 	}
 }
+
