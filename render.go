@@ -7,7 +7,7 @@ type Theme struct {
 	// Heading colors per level (index 0 = H1). Used by the tview backend.
 	Heading [6]string
 
-	Link        string
+	Link         string
 	InlineCodeFG string
 	InlineCodeBG string
 	CodeBlockFG  string

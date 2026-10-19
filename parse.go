@@ -49,7 +49,7 @@ func parseBlock(n gast.Node, source []byte) []Block {
 	case *extast.Table:
 		return []Block{{Kind: BlockTable, Table: parseTable(v, source)}}
 	case *gast.HTMLBlock:
-		return []Block{{Kind: BlockParagraph, Segments: []Segment{{Text: string(v.Text(source))}}}}
+		return []Block{{Kind: BlockParagraph, Segments: []Segment{{Text: string(htmlBlockText(v, source))}}}}
 	}
 	return nil
 }
@@ -112,6 +112,10 @@ func parseList(list *gast.List, source []byte) []ListItem {
 }
 
 // parseTable maps a GFM Table into header + body rows.
+//
+// spread one readable sequence of row and cell handling across files.
+//
+//nolint:gocognit // A flat walk over the GFM table node; splitting it into helpers would
 func parseTable(t *extast.Table, source []byte) TableData {
 	out := TableData{Aligns: convertAligns(t.Alignments)}
 	for row := t.FirstChild(); row != nil; row = row.NextSibling() {
@@ -178,30 +182,11 @@ func collectInline(n gast.Node, source []byte, base Style) []Segment {
 func inlineNode(n gast.Node, source []byte, base Style) []Segment {
 	switch v := n.(type) {
 	case *gast.Text:
-		var out []Segment
-		if val := string(v.Value(source)); val != "" {
-			out = append(out, Segment{Text: val, Style: base})
-		}
-		if v.SoftLineBreak() {
-			out = append(out, Segment{Text: " ", Style: base})
-		}
-		if v.HardLineBreak() {
-			out = append(out, Segment{Text: "\n", Style: base})
-		}
-		return out
+		return textSegments(v, source, base)
 	case *gast.String:
 		return []Segment{{Text: string(v.Value), Style: base}}
 	case *gast.CodeSpan:
-		var b strings.Builder
-		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-			switch t := c.(type) {
-			case *gast.Text:
-				b.Write(t.Value(source))
-			case *gast.String:
-				b.Write(t.Value)
-			}
-		}
-		return []Segment{{Text: b.String(), Style: base, Code: true}}
+		return []Segment{{Text: codeSpanText(n, source), Style: base, Code: true}}
 	case *gast.Emphasis:
 		st := base
 		if v.Level == 1 {
@@ -219,7 +204,7 @@ func inlineNode(n gast.Node, source []byte, base Style) []Segment {
 	case *gast.AutoLink:
 		return []Segment{{Text: string(v.Label(source)), Style: base, Link: string(v.URL(source))}}
 	case *gast.RawHTML:
-		return []Segment{{Text: string(v.Text(source)), Style: base}}
+		return []Segment{{Text: string(v.Segments.Value(source)), Style: base}}
 	case *extast.Strikethrough:
 		st := base
 		st.Strikethrough = true
@@ -235,4 +220,46 @@ func inlineNode(n gast.Node, source []byte, base Style) []Segment {
 		return collectInline(n, source, base)
 	}
 	return nil
+}
+
+// htmlBlockText returns an HTML block's raw text.
+//
+// goldmark deprecates HTMLBlock.Text in favor of reading the node's lines; this
+// is the same concatenation, closure line included.
+func htmlBlockText(n *gast.HTMLBlock, source []byte) []byte {
+	ret := n.Lines().Value(source)
+	if n.HasClosure() {
+		ret = append(ret, n.ClosureLine.Value(source)...)
+	}
+	return ret
+}
+
+// textSegments maps a Text node, preserving its soft and hard line breaks.
+func textSegments(v *gast.Text, source []byte, base Style) []Segment {
+	var out []Segment
+	if val := string(v.Value(source)); val != "" {
+		out = append(out, Segment{Text: val, Style: base})
+	}
+	if v.SoftLineBreak() {
+		out = append(out, Segment{Text: " ", Style: base})
+	}
+	if v.HardLineBreak() {
+		out = append(out, Segment{Text: "\n", Style: base})
+	}
+	return out
+}
+
+// codeSpanText returns the literal text of a code span, whose children are Text
+// and String nodes.
+func codeSpanText(n gast.Node, source []byte) string {
+	var b strings.Builder
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		switch t := c.(type) {
+		case *gast.Text:
+			b.Write(t.Value(source))
+		case *gast.String:
+			b.Write(t.Value)
+		}
+	}
+	return b.String()
 }

@@ -86,6 +86,7 @@ func renderCode(cb CodeBlock, opts Options) string {
 	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(source) + closeTag()
 }
 
+//nolint:gocognit // Column widths, separators and padding are laid out together; splitting scatters the rules.
 func renderTable(b *strings.Builder, t TableData, opts Options) {
 	cols := tableCols(t)
 	if cols == 0 {
