@@ -11,6 +11,8 @@ linters:
     - dogsled
     - dupl
     - durationcheck
+    - copyloopvar
+    - err113
     - errcheck
     - errorlint
     - exhaustive
@@ -21,6 +23,7 @@ linters:
     - gocritic
     - gocyclo
     - godot
+    - gosec
     - govet
     - importas
     - ineffassign
@@ -43,6 +46,7 @@ linters:
     - unconvert
     - unparam
     - unused
+    - usetesting
     - wastedassign
     - whitespace
   settings:
