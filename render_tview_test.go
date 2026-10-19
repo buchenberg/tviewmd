@@ -350,7 +350,8 @@ func TestCellPlainWidthCountsEmojiPresentation(t *testing.T) {
 	t.Parallel()
 
 	if got := uniseg.StringWidth("\u270d\ufe0f"); got != 2 {
-		t.Fatalf("uniseg reports the U+270D+VS16 cluster as %d cells, want 2", got)
+		t.Fatalf("uniseg oracle changed: it now reports the U+270D+VS16 cluster as %d cells, not 2; "+
+			"the expectations below encode cluster-aware measuring, revisit them", got)
 	}
 	cases := []struct {
 		name string
@@ -424,19 +425,27 @@ func screenRowWidths(t *testing.T, tagged string, w, h int) []int {
 func TestRenderTableAlignsWithEmoji(t *testing.T) {
 	t.Parallel()
 
-	// The emoji column is first so its cell carries trailing padding and every
-	// row therefore paints its full planned width instead of stopping early at
-	// the last visible character.
-	src := "| mark | kind |\n|------|------|\n| \u270d\ufe0f | note |\n| \u270d\ufe0f | todo |\n"
-	out := Render(src, Options{Width: 60})
+	// Two tables of identical shape; only the first body column differs. Every
+	// painted row must be as wide in the emoji table as in the plain one — a
+	// mismatch means the renderer measured the cluster with a different oracle
+	// than tview painted it with. Comparing against a control keeps this free
+	// of hardcoded column arithmetic.
+	const (
+		plainSrc = "| mark | kind |\n|------|------|\n| note | note |\n| todo | todo |\n"
+		emojiSrc = "| mark | kind |\n|------|------|\n| \u270d\ufe0f | note |\n| \u270d\ufe0f | todo |\n"
+	)
+	want := screenRowWidths(t, Render(plainSrc, Options{Width: 60}), 80, 8)
+	out := Render(emojiSrc, Options{Width: 60})
+	got := screenRowWidths(t, out, 80, 8)
 
-	const wantCols = 9 // "mark" (4) + gap + "kind" (4)
-	widths := screenRowWidths(t, out, 80, 8)
 	// Rows 0-3 are header, separator, and two body rows; the rest are blank.
 	for row := 0; row < 4; row++ {
-		if widths[row] != wantCols {
-			t.Errorf("table row %d is %d columns wide, want %d (ragged borders):\n%s",
-				row, widths[row], wantCols, out)
+		if want[row] == 0 {
+			t.Fatalf("control table row %d painted nothing; the control is broken", row)
+		}
+		if got[row] != want[row] {
+			t.Errorf("row %d is %d columns wide, control row is %d (ragged borders):\n%s",
+				row, got[row], want[row], out)
 		}
 	}
 }
