@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
+	"github.com/rivo/uniseg"
 )
 
 // RenderTView renders parsed blocks to tview color-tagged text suitable for a
@@ -180,12 +180,24 @@ func tableCols(t TableData) int {
 	return n
 }
 
+// cellPlainWidth returns the display width of a cell's visible text. It is
+// measured with uniseg over the concatenated segment text: uniseg is
+// grapheme-cluster aware, which is what tview/tcell use when painting a cell.
+// Per-rune width arithmetic (go-runewidth) under-counts any emoji-presentation
+// sequence -- a base rune plus U+FE0F (VS16) is zero-width on its own and only
+// promotes the preceding cluster to two cells, which summing runes can never
+// see (1 + 0 = 1). Under-counting a column makes every row that contains such a
+// cell one cell wider than its separator, so borders come out ragged.
+//
+// The segments are joined before measuring so a cluster split across segment
+// boundaries (for example a combining mark that starts a new segment) is still
+// measured once.
 func cellPlainWidth(c TableCell) int {
-	n := 0
+	var b strings.Builder
 	for _, s := range c.Segments {
-		n += runewidth.StringWidth(s.Text)
+		b.WriteString(s.Text)
 	}
-	return n
+	return uniseg.StringWidth(b.String())
 }
 
 // renderSegments emits inline content for a block/cell. Adjacent segments that

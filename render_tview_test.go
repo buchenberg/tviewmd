@@ -6,6 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rivo/uniseg"
 )
 
 func TestRenderBoldTag(t *testing.T) {
@@ -342,4 +343,118 @@ func TestRenderTableCellLinkThemed(t *testing.T) {
 	}
 }
 
+// cellPlainWidthCountsClusters: a single cell holding U+270D U+FE0F is two
+// screen columns wide because VS16 promotes the cluster to emoji presentation,
+// even though the base rune alone is width one.
+func TestCellPlainWidthCountsEmojiPresentation(t *testing.T) {
+	t.Parallel()
 
+	if got := uniseg.StringWidth("\u270d\ufe0f"); got != 2 {
+		t.Fatalf("uniseg oracle changed: it now reports the U+270D+VS16 cluster as %d cells, not 2; "+
+			"the expectations below encode cluster-aware measuring, revisit them", got)
+	}
+	cases := []struct {
+		name string
+		cell TableCell
+		want int
+	}{
+		{
+			name: "plain ascii",
+			cell: TableCell{Segments: []Segment{{Text: "note"}}},
+			want: 4,
+		},
+		{
+			name: "emoji presentation sequence",
+			cell: TableCell{Segments: []Segment{{Text: "\u270d\ufe0f"}}},
+			want: 2,
+		},
+		{
+			name: "cluster split across segments",
+			cell: TableCell{Segments: []Segment{{Text: "\u270d"}, {Text: "\ufe0f"}}},
+			want: 2,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := cellPlainWidth(tc.cell); got != tc.want {
+				t.Errorf("cellPlainWidth = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// screenRowWidths draws tagged text into a wide simulation screen with wrapping
+// disabled and returns, per screen row, the number of columns painted up to and
+// including the last non-blank cell. Wide (two-column) characters count as two.
+func screenRowWidths(t *testing.T, tagged string, w, h int) []int {
+	t.Helper()
+	tv := tview.NewTextView().SetDynamicColors(true).SetWrap(false)
+	tv.SetText(tagged)
+	tv.SetRect(0, 0, w, h)
+	screen := tcell.NewSimulationScreen("")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("sim screen init: %v", err)
+	}
+	t.Cleanup(screen.Fini)
+	screen.SetSize(w, h)
+	tv.Draw(screen)
+	screen.Show() // flush back buffer to front so GetContents reflects the draw
+	cells, sw, sh := screen.GetContents()
+	widths := make([]int, h)
+	for row := 0; row < h && row < sh; row++ {
+		for col := 0; col < sw; col++ {
+			c := cells[row*sw+col]
+			if len(c.Bytes) == 0 || string(c.Bytes) == " " {
+				continue
+			}
+			// The cluster stored in a cell owns its own columns: a wide
+			// character occupies col and col+1, and the continuation cell
+			// carries no bytes.
+			end := col + max(uniseg.StringWidth(string(c.Bytes)), 1)
+			widths[row] = max(widths[row], end)
+		}
+	}
+	return widths
+}
+
+// TestRenderTableAlignsWithEmoji guards the table layout against emoji that are
+// two columns wide. Padding is planned from cellPlainWidth, but tview paints
+// grapheme clusters, so an under-measured column makes every row containing it
+// one column wider than the header/separator it is supposed to line up with.
+func TestRenderTableAlignsWithEmoji(t *testing.T) {
+	t.Parallel()
+
+	// Two tables of identical shape; only the first body column differs. The
+	// plain one is the control: it carries no cluster, so a row that comes out
+	// wider in the emoji table means the renderer measured the cluster with a
+	// different oracle than tview painted it with. Both tables are also held to
+	// the same absolute width, so an emoji-free regression cannot hide behind
+	// the comparison. That width is taken from the oracle rather than written
+	// out, so it cannot drift into an opaque magic number: two cells plus the
+	// single space between columns.
+	wantCols := uniseg.StringWidth("mark") + 1 + uniseg.StringWidth("kind")
+	const (
+		plainSrc = "| mark | kind |\n|------|------|\n| note | note |\n| todo | todo |\n"
+		emojiSrc = "| mark | kind |\n|------|------|\n| \u270d\ufe0f | note |\n| \u270d\ufe0f | todo |\n"
+	)
+	tables := []struct {
+		name string
+		src  string
+	}{
+		{"plain", plainSrc},
+		{"emoji", emojiSrc},
+	}
+
+	for _, table := range tables {
+		out := Render(table.src, Options{Width: 60})
+		widths := screenRowWidths(t, out, 80, 8)
+		// Rows 0-3 are header, separator, and two body rows; the rest are blank.
+		for row := 0; row < 4; row++ {
+			if widths[row] != wantCols {
+				t.Errorf("%s table row %d is %d columns wide, want %d (ragged borders):\n%s",
+					table.name, row, widths[row], wantCols, out)
+			}
+		}
+	}
+}
