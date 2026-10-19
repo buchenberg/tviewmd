@@ -26,8 +26,8 @@ import "strings"
 type Renderer struct {
 	opts Options
 
-	raw  strings.Builder
-	out  string // cached rendered output, valid only when !dirty
+	raw   strings.Builder
+	out   string // cached rendered output, valid only when !dirty
 	dirty bool
 }
 

@@ -1,43 +1,32 @@
+version: "2"
+
 run:
   timeout: 5m
-  concurrency: 4
-  issues-exit-code: 1
   tests: false
 
-output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
-
 linters:
+  default: none
   enable:
-    - errcheck
-    - gofmt
-    - goimports
-    - gosec
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - typecheck
-    - unused
     - bodyclose
     - dogsled
     - dupl
     - durationcheck
+    - copyloopvar
+    - err113
+    - errcheck
     - errorlint
     - exhaustive
-    - exportloopref
     - funlen
-    - gci
     - gochecknoinits
     - gocognit
     - goconst
     - gocritic
     - gocyclo
     - godot
-    - goerr113
+    - gosec
+    - govet
     - importas
+    - ineffassign
     - lll
     - makezero
     - misspell
@@ -50,53 +39,50 @@ linters:
     - revive
     - rowserrcheck
     - sqlclosecheck
-    - stylecheck
-    - tenv
+    - staticcheck
     - testpackage
     - thelper
     - tparallel
     - unconvert
     - unparam
+    - unused
+    - usetesting
     - wastedassign
     - whitespace
-
-linters-settings:
-  gofmt:
-    simplify: true
-
-  goimports:
-    local-prefixes: github.com/buchenberg
-
-  gci:
-    local-prefixes: github.com/buchenberg
-
-  gocognit:
-    min-complexity: 15
-
-  gocyclo:
-    min-complexity: 15
-
-  godot:
-    capital: false
-
-  lll:
-    line-length: 120
-    tab-length: 4
-
-  misspell:
-    locale: US
-
-  revive:
-    confidence: 0.8
-    severity: warning
+  settings:
+    exhaustive:
+      # Switches here end in a default that returns the canonical fallback, so a
+      # default clause means the case list is complete on purpose.
+      default-signifies-exhaustive: true
+    gocognit:
+      min-complexity: 15
+    gocyclo:
+      min-complexity: 15
+    godot:
+      capital: false
+    lll:
+      line-length: 120
+    misspell:
+      locale: US
+    revive:
+      confidence: 0.8
+      severity: warning
+      rules:
+        - name: exported
+        - name: package-comments
+  exclusions:
     rules:
-      - name: exported
-        disabled: false
-      - name: package-comments
-        disabled: false
+      - linters:
+          - lll
+        source: "^//go:generate"
 
-issues:
-  exclude-rules:
-    - linters:
-        - lll
-      source: "^//go:generate"
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - github.com/buchenberg

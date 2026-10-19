@@ -54,8 +54,11 @@ type TextAlign int
 const (
 	// AlignDefault left-aligns (the CommonMark default rendering).
 	AlignDefault TextAlign = iota
+	// AlignLeft aligns cell content to the left.
 	AlignLeft
+	// AlignCenter centers cell content.
 	AlignCenter
+	// AlignRight aligns cell content to the right.
 	AlignRight
 )
 
@@ -92,9 +95,9 @@ type TableData struct {
 // the others are zero-valued.
 type Block struct {
 	Kind     BlockKind
-	Level    int // heading level 1-6 (BlockHeading only)
-	Segments []Segment // paragraph, heading, blockquote inline content
-	Code     CodeBlock // BlockCodeBlock only
+	Level    int        // heading level 1-6 (BlockHeading only)
+	Segments []Segment  // paragraph, heading, blockquote inline content
+	Code     CodeBlock  // BlockCodeBlock only
 	Items    []ListItem // BlockList only
-	Table    TableData // BlockTable only
+	Table    TableData  // BlockTable only
 }
