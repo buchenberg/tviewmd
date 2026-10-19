@@ -425,27 +425,36 @@ func screenRowWidths(t *testing.T, tagged string, w, h int) []int {
 func TestRenderTableAlignsWithEmoji(t *testing.T) {
 	t.Parallel()
 
-	// Two tables of identical shape; only the first body column differs. Every
-	// painted row must be as wide in the emoji table as in the plain one — a
-	// mismatch means the renderer measured the cluster with a different oracle
-	// than tview painted it with. Comparing against a control keeps this free
-	// of hardcoded column arithmetic.
+	// Two tables of identical shape; only the first body column differs. The
+	// plain one is the control: it carries no cluster, so a row that comes out
+	// wider in the emoji table means the renderer measured the cluster with a
+	// different oracle than tview painted it with. Both tables are also held to
+	// the same absolute width, so an emoji-free regression cannot hide behind
+	// the comparison. That width is taken from the oracle rather than written
+	// out, so it cannot drift into an opaque magic number: two cells plus the
+	// single space between columns.
+	wantCols := uniseg.StringWidth("mark") + 1 + uniseg.StringWidth("kind")
 	const (
 		plainSrc = "| mark | kind |\n|------|------|\n| note | note |\n| todo | todo |\n"
 		emojiSrc = "| mark | kind |\n|------|------|\n| \u270d\ufe0f | note |\n| \u270d\ufe0f | todo |\n"
 	)
-	want := screenRowWidths(t, Render(plainSrc, Options{Width: 60}), 80, 8)
-	out := Render(emojiSrc, Options{Width: 60})
-	got := screenRowWidths(t, out, 80, 8)
+	tables := []struct {
+		name string
+		src  string
+	}{
+		{"plain", plainSrc},
+		{"emoji", emojiSrc},
+	}
 
-	// Rows 0-3 are header, separator, and two body rows; the rest are blank.
-	for row := 0; row < 4; row++ {
-		if want[row] == 0 {
-			t.Fatalf("control table row %d painted nothing; the control is broken", row)
-		}
-		if got[row] != want[row] {
-			t.Errorf("row %d is %d columns wide, control row is %d (ragged borders):\n%s",
-				row, got[row], want[row], out)
+	for _, table := range tables {
+		out := Render(table.src, Options{Width: 60})
+		widths := screenRowWidths(t, out, 80, 8)
+		// Rows 0-3 are header, separator, and two body rows; the rest are blank.
+		for row := 0; row < 4; row++ {
+			if widths[row] != wantCols {
+				t.Errorf("%s table row %d is %d columns wide, want %d (ragged borders):\n%s",
+					table.name, row, widths[row], wantCols, out)
+			}
 		}
 	}
 }
