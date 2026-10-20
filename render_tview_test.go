@@ -83,6 +83,18 @@ func TestRenderListMarkers(t *testing.T) {
 	}
 }
 
+func TestRenderNestedListIndent(t *testing.T) {
+	t.Parallel()
+
+	out := Render("- a\n  - b\n", Options{})
+	if !strings.Contains(out, "• a") {
+		t.Errorf("outer bullet missing in %q", out)
+	}
+	if !strings.Contains(out, "  • b") {
+		t.Errorf("nested bullet not indented in %q", out)
+	}
+}
+
 func TestRenderBlockquote(t *testing.T) {
 	out := Render("> quoted", Options{})
 	if !strings.Contains(out, "▎") {
