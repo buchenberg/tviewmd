@@ -475,6 +475,45 @@ func TestSolveColumnWidths(t *testing.T) {
 	}
 }
 
+// TestCellTokensDecorationAfterLinkText pins the token ordering for a
+// link group followed by trailing plain text in the same cell: the
+// decoration token must come AFTER the link text it labels. An earlier
+// tokenization appended the group's decoration while the group's final
+// token was still open, painting "(url) docs" instead of "docs (url)" in
+// every wrapped cell that had text after a link.
+func TestCellTokensDecorationAfterLinkText(t *testing.T) {
+	t.Parallel()
+
+	cell := TableCell{Segments: []Segment{
+		{Text: "docs", Link: "https://example.com/u"},
+		{Text: " tail text here"},
+	}}
+	got := cellTokens(cell)
+	want := []string{"docs", "(https://example.com/u)", "tail", "text", "here"}
+	if len(got) != len(want) {
+		t.Fatalf("cellTokens = %v, want %v", gotTexts(got), want)
+	}
+	for i, w := range want {
+		if got[i].text != w {
+			t.Errorf("token %d = %q, want %q (full: %v)", i, got[i].text, w, gotTexts(got))
+		}
+	}
+	// The mid-word glue path is not involved here, but the link text and its
+	// decoration must share a treatment so they merge into one styled unit.
+	if !sameSegmentTreatment(got[0].seg, got[1].seg) {
+		t.Errorf("link text and decoration do not share treatment; they would paint as separate styled runs")
+	}
+}
+
+// gotTexts renders tokens as their texts for failure messages.
+func gotTexts(toks []cellToken) []string {
+	out := make([]string, len(toks))
+	for i, tok := range toks {
+		out[i] = tok.text
+	}
+	return out
+}
+
 // screenRowWidths draws tagged text into a wide simulation screen with wrapping
 // disabled and returns, per screen row, the number of columns painted up to and
 // including the last non-blank cell. Wide (two-column) characters count as two.

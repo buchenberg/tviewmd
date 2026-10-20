@@ -209,21 +209,7 @@ func tableCols(t TableData) int {
 // removes exactly one cell from the sum, so the loops cost O(total excess)
 // and cannot spin -- column sums here are small table widths.
 func solveColumnWidths(t TableData, budget int) []int {
-	cols := tableCols(t)
-	if cols == 0 {
-		return nil
-	}
-	natural := make([]int, cols)
-	for i, c := range t.Header {
-		if i < cols {
-			natural[i] = max(natural[i], cellPaintedWidth(c))
-		}
-	}
-	for _, row := range t.Rows {
-		for i := 0; i < cols && i < len(row); i++ {
-			natural[i] = max(natural[i], cellPaintedWidth(row[i]))
-		}
-	}
+	natural := naturalColumnWidths(t)
 	sum := 0
 	for _, w := range natural {
 		sum += w
@@ -232,43 +218,64 @@ func solveColumnWidths(t TableData, budget int) []int {
 	if budget <= 0 || sum <= budget {
 		return natural
 	}
-	floors := make([]int, cols)
-	for i := 0; i < cols; i++ {
+	floors := make([]int, len(natural))
+	for i := range floors {
 		floors[i] = colTokenFloor(t, i, natural[i])
 	}
-	widths := append([]int(nil), natural...)
-	// Soft shrink: one cell per pass from the widest column above its floor
-	// (leftmost on ties), spending the budget where it buys the least and
-	// keeping identical tables on identical plans.
-	for sum > budget {
-		best := -1
-		for i := 0; i < cols; i++ {
-			if widths[i] > floors[i] && (best < 0 || widths[i] > widths[best]) {
-				best = i
-			}
-		}
-		if best < 0 {
-			break // every column sits on its floor; the floors must give way
-		}
-		widths[best]--
+	// Soft shrink, then hard-break. In both phases stepReduce takes one cell
+	// per pass from the widest column still above its limit -- the floors for
+	// the soft phase (spending the budget where it buys the least and keeping
+	// identical tables on identical plans), then the hard-break minimum of 1
+	// when even the floors must give way. Width 0 would hide a non-empty
+	// column entirely, so the second loop bottoms out at all-ones and any
+	// remaining overflow is final.
+	widths := slices.Clone(natural)
+	for sum > budget && stepReduce(widths, floors) {
 		sum--
 	}
-	// Hard-break: reduce the floors themselves, largest first under the same
-	// tie rule. A non-empty column never drops below 1 -- width 0 would hide
-	// it entirely -- so with a budget under the non-empty column count the
-	// loop bottoms out at all-ones and the remaining overflow is final.
-	for sum > budget {
-		best := -1
-		for i := 0; i < cols; i++ {
-			if widths[i] > 1 && (best < 0 || widths[i] > widths[best]) {
-				best = i
-			}
-		}
-		if best < 0 {
-			break // all non-empty columns at 1; overflow accepted
-		}
-		widths[best]--
+	hard := make([]int, len(widths))
+	for i := range hard {
+		hard[i] = 1
+	}
+	for sum > budget && stepReduce(widths, hard) {
 		sum--
+	}
+	return widths
+}
+
+// stepReduce takes one cell from the widest column whose width exceeds
+// lim[i] (leftmost on ties) and reports whether it found one; the caller
+// stops at a phase's limit when it returns false. Deterministic by
+// construction -- the widest-first rule with leftmost tie-breaking.
+func stepReduce(widths, lim []int) bool {
+	best := -1
+	for i := range widths {
+		if widths[i] > lim[i] && (best < 0 || widths[i] > widths[best]) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return false
+	}
+	widths[best]--
+	return true
+}
+
+// naturalColumnWidths returns each column's max painted width over the
+// header and all body rows -- the max-content plan the width-constrained
+// layout shrinks from, and the direct plan when no budget exists.
+func naturalColumnWidths(t TableData) []int {
+	cols := tableCols(t)
+	widths := make([]int, cols)
+	for i, c := range t.Header {
+		if i < cols {
+			widths[i] = max(widths[i], cellPaintedWidth(c))
+		}
+	}
+	for _, row := range t.Rows {
+		for i := 0; i < cols && i < len(row); i++ {
+			widths[i] = max(widths[i], cellPaintedWidth(row[i]))
+		}
 	}
 	return widths
 }
@@ -386,60 +393,72 @@ func cellTokens(c TableCell) []cellToken {
 	// same-treatment segment group, mirroring the group walk in
 	// cellPaintedWidth/renderSegments, to evaluate the decoration condition.
 	var groupText strings.Builder
-	flush := func() {
-		if open != nil {
-			toks = append(toks, *open)
-			open = nil
-		}
-	}
-	closeGroup := func(link string, seg Segment) {
-		raw := groupText.String()
-		if raw != "" && link != "" && raw != link {
-			toks = append(toks, cellToken{text: "(" + link + ")", seg: seg})
-		}
-		groupText.Reset()
-	}
 	for si, s := range c.Segments {
-		if si == 0 || !sameSegmentTreatment(c.Segments[si-1], s) {
-			// A new treatment group starts: the previous one may earn a
-			// decoration token right here, before any of the new group's
-			// tokens, preserving paint order.
-			var link string
-			if si > 0 {
-				link = c.Segments[si-1].Link
-				closeGroup(link, c.Segments[si-1])
+		if si > 0 && !sameSegmentTreatment(c.Segments[si-1], s) {
+			// The previous treatment group ends mid-cell. Its still-open token
+			// belongs to that group and must be flushed BEFORE the group's
+			// decoration token is appended: the decoration paints after the
+			// link text it labels, never before it.
+			if open != nil {
+				toks = append(toks, *open)
+				open = nil
 			}
+			appendDecoration(&toks, groupText.String(), c.Segments[si-1])
+			groupText.Reset()
 		}
 		groupText.WriteString(s.Text)
-		for i := 0; i < len(s.Text); i++ {
-			ch := s.Text[i]
-			if isASCIISpaceByte(ch) {
-				flush()
-				if ch == '\n' {
-					pendingBreak = true
-				}
-				carryGlue = false
-				continue
-			}
-			if open == nil {
-				open = &cellToken{seg: s, pre: pendingBreak, glue: carryGlue}
-				pendingBreak = false
-			} else if !sameSegmentTreatment(open.seg, s) {
-				// Mid-word style change: the new token continues the word, so it
-				// glues to its predecessor (no painted space, no wrap gap).
-				flush()
-				open = &cellToken{seg: s, glue: true}
-			}
-			open.text += string(ch)
-			carryGlue = true
-		}
+		toks, open, pendingBreak, carryGlue = scanSegmentTokens(toks, open, s, pendingBreak, carryGlue)
 	}
-	flush()
-	if len(c.Segments) > 0 {
-		last := c.Segments[len(c.Segments)-1]
-		closeGroup(last.Link, last)
+	if open != nil {
+		toks = append(toks, *open)
+	}
+	if n := len(c.Segments); n > 0 {
+		appendDecoration(&toks, groupText.String(), c.Segments[n-1])
 	}
 	return toks
+}
+
+// appendDecoration appends a group's link decoration token when
+// renderSegmentGroup's emission condition holds (group text non-empty, link
+// set, and the text not the bare link target). Mirroring that condition
+// verbatim keeps measurement and paint coupled.
+func appendDecoration(toks *[]cellToken, raw string, seg Segment) {
+	if raw != "" && seg.Link != "" && raw != seg.Link {
+		*toks = append(*toks, cellToken{text: "(" + seg.Link + ")", seg: seg})
+	}
+}
+
+// scanSegmentTokens consumes one segment's text into tokens, threading the
+// carry state across segment boundaries: open is the token under
+// construction (nil at a word boundary), carryGlue says the next token would
+// continue the current word with no source whitespace between (a mid-word
+// style change: the boundary flush above already split it, and the new token
+// glues so no phantom space appears), and pendingBreak says a "\n" is
+// waiting to force a break before the next token.
+func scanSegmentTokens(
+	toks []cellToken, open *cellToken, s Segment, pendingBreak, carryGlue bool,
+) ([]cellToken, *cellToken, bool, bool) {
+	for i := 0; i < len(s.Text); i++ {
+		ch := s.Text[i]
+		if isASCIISpaceByte(ch) {
+			if open != nil {
+				toks = append(toks, *open)
+				open = nil
+			}
+			if ch == '\n' {
+				pendingBreak = true
+			}
+			carryGlue = false
+			continue
+		}
+		if open == nil {
+			open = &cellToken{seg: s, pre: pendingBreak, glue: carryGlue}
+			pendingBreak = false
+		}
+		open.text += string(ch)
+		carryGlue = true
+	}
+	return toks, open, pendingBreak, carryGlue
 }
 
 // splitWideToken splits text into chunks of at most width display cells at
@@ -486,14 +505,11 @@ func wrapTokens(toks []cellToken, width int) [][]cellToken {
 	if width <= 0 {
 		return [][]cellToken{toks}
 	}
+	// Hard-break oversized tokens up front; see preSplitWideTokens.
+	toks = preSplitWideTokens(toks, width)
 	var lines [][]cellToken
 	var cur []cellToken
 	curW := 0
-	closeLine := func() {
-		lines = append(lines, cur)
-		cur = nil
-		curW = 0
-	}
 	for _, tok := range toks {
 		tw := uniseg.StringWidth(tok.text)
 		gap := 1
@@ -501,21 +517,9 @@ func wrapTokens(toks []cellToken, width int) [][]cellToken {
 			gap = 0
 		}
 		if len(cur) > 0 && (tok.pre || curW+gap+tw > width) {
-			closeLine()
-		}
-		if tw > width {
-			// Hard-break: every chunk but the last fills a line of its own;
-			// the last chunk starts the next line and may take more tokens.
-			chunks := splitWideToken(tok.text, width)
-			for k, chunk := range chunks {
-				nt := cellToken{text: chunk, seg: tok.seg, glue: tok.glue && k == 0}
-				cur = append(cur, nt)
-				if k < len(chunks)-1 {
-					closeLine()
-				}
-			}
-			curW = uniseg.StringWidth(chunks[len(chunks)-1])
-			continue
+			lines = append(lines, cur)
+			cur = nil
+			curW = 0
 		}
 		cur = append(cur, tok)
 		curW += gap + tw
@@ -524,6 +528,31 @@ func wrapTokens(toks []cellToken, width int) [][]cellToken {
 		lines = append(lines, cur)
 	}
 	return lines
+}
+
+// preSplitWideTokens returns toks with every token wider than width split
+// into cluster-bounded chunks. Every non-final chunk fills a line of its own
+// downstream; the final chunk joins the greedy pass like any other token.
+// Because a split token's first chunk fills the width, it can never share a
+// line with predecessors -- the same layout as splitting inline, without the
+// loop nesting in the line builder.
+func preSplitWideTokens(toks []cellToken, width int) []cellToken {
+	out := make([]cellToken, 0, len(toks))
+	for _, tok := range toks {
+		if uniseg.StringWidth(tok.text) <= width {
+			out = append(out, tok)
+			continue
+		}
+		for k, chunk := range splitWideToken(tok.text, width) {
+			out = append(out, cellToken{
+				text: chunk,
+				seg:  tok.seg,
+				pre:  tok.pre && k == 0,
+				glue: tok.glue && k == 0,
+			})
+		}
+	}
+	return out
 }
 
 // tokenLinePaintedWidth returns the display width a painted line of tokens
