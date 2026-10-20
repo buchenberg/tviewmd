@@ -182,6 +182,121 @@ func tableCols(t TableData) int {
 	return n
 }
 
+// solveColumnWidths decides the final display width of each column of t given
+// budget -- the total screen cells available for column content, separators
+// excluded. It is pure: no rendering, no I/O; the caller owns painting the
+// planned widths.
+//
+// Columns start at natural width (max painted content over header+rows). When
+// that fits, or there is no budget at all, the natural widths are the answer.
+// Otherwise widths shrink one cell at a time from the widest column that still
+// has slack above its floor, where the floor is the column's widest
+// unbreakable token: a TextView wraps between tokens, so a narrower column
+// could not be honored anyway. If even the floors do not fit, the floors
+// themselves give way, largest first, down to 1 per non-empty column; below
+// that the table overflows, which the caller/wrapper accepts. The
+// widest-first rule is deterministic (leftmost wins ties) and each pass
+// removes exactly one cell from the sum, so the loops cost O(total excess)
+// and cannot spin -- column sums here are small table widths.
+func solveColumnWidths(t TableData, budget int) []int {
+	cols := tableCols(t)
+	if cols == 0 {
+		return nil
+	}
+	natural := make([]int, cols)
+	for i, c := range t.Header {
+		if i < cols {
+			natural[i] = max(natural[i], cellPaintedWidth(c))
+		}
+	}
+	for _, row := range t.Rows {
+		for i := 0; i < cols && i < len(row); i++ {
+			natural[i] = max(natural[i], cellPaintedWidth(row[i]))
+		}
+	}
+	sum := 0
+	for _, w := range natural {
+		sum += w
+	}
+	// Nothing to fit: either no budget exists, or max-content already fits.
+	if budget <= 0 || sum <= budget {
+		return natural
+	}
+	floors := make([]int, cols)
+	for i := 0; i < cols; i++ {
+		floors[i] = colTokenFloor(t, i, natural[i])
+	}
+	widths := append([]int(nil), natural...)
+	// Soft shrink: one cell per pass from the widest column above its floor
+	// (leftmost on ties), spending the budget where it buys the least and
+	// keeping identical tables on identical plans.
+	for sum > budget {
+		best := -1
+		for i := 0; i < cols; i++ {
+			if widths[i] > floors[i] && (best < 0 || widths[i] > widths[best]) {
+				best = i
+			}
+		}
+		if best < 0 {
+			break // every column sits on its floor; the floors must give way
+		}
+		widths[best]--
+		sum--
+	}
+	// Hard-break: reduce the floors themselves, largest first under the same
+	// tie rule. A non-empty column never drops below 1 -- width 0 would hide
+	// it entirely -- so with a budget under the non-empty column count the
+	// loop bottoms out at all-ones and the remaining overflow is final.
+	for sum > budget {
+		best := -1
+		for i := 0; i < cols; i++ {
+			if widths[i] > 1 && (best < 0 || widths[i] > widths[best]) {
+				best = i
+			}
+		}
+		if best < 0 {
+			break // all non-empty columns at 1; overflow accepted
+		}
+		widths[best]--
+		sum--
+	}
+	return widths
+}
+
+// colTokenFloor returns the width of the widest unbreakable token in column
+// col -- the width a TextView can never wrap below, since it breaks between
+// whitespace-separated runs, not inside them. Token widths use uniseg, so
+// they are cluster-aware exactly like cellPlainWidth. natural (the column's
+// max-content width) decides emptiness: a column with no content anywhere
+// floors at 0 so it claims no budget and gets no padding, while any column
+// that paints something floors at 1, the smallest useful column.
+func colTokenFloor(t TableData, col, natural int) int {
+	widest := 0
+	measure := func(c TableCell) {
+		var b strings.Builder
+		for _, s := range c.Segments {
+			b.WriteString(s.Text)
+		}
+		// Fields splits on all whitespace, "\n" included, so hard-wrapped
+		// cell text cannot smuggle one token across a line break.
+		for _, tok := range strings.Fields(b.String()) {
+			widest = max(widest, uniseg.StringWidth(tok))
+		}
+	}
+	if col < len(t.Header) {
+		measure(t.Header[col])
+	}
+	for _, row := range t.Rows {
+		if col < len(row) {
+			measure(row[col])
+		}
+	}
+	if natural == 0 {
+		return 0
+	}
+	return max(widest, 1)
+}
+
 // cellPlainWidth returns the display width of a cell's visible text. It is
 // measured with uniseg over the concatenated segment text: uniseg is
 // grapheme-cluster aware, which is what tview/tcell use when painting a cell.

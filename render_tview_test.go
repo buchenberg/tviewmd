@@ -1,6 +1,7 @@
 package tviewmd
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -379,6 +380,96 @@ func TestCellPlainWidthCountsEmojiPresentation(t *testing.T) {
 			t.Parallel()
 			if got := cellPlainWidth(tc.cell); got != tc.want {
 				t.Errorf("cellPlainWidth = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// mkCell builds a single-segment plain-text cell; the planner tests need no
+// styling, only the text the painter would measure.
+func mkCell(text string) TableCell {
+	return TableCell{Segments: []Segment{{Text: text}}}
+}
+
+// TestSolveColumnWidths covers the column-budget planner: max-content widths
+// when they fit, widest-first shrinking clamped at unbreakable-token floors,
+// hard-breaking the floors when even they overflow, and the degenerate budgets
+// (0, below the column count) that must terminate deterministically.
+func TestSolveColumnWidths(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		table  TableData
+		budget int
+		want   []int
+	}{
+		{
+			name:   "fits, max-content unchanged",
+			table:  TableData{Header: []TableCell{mkCell("abc"), mkCell("de")}, Rows: [][]TableCell{{mkCell("f"), mkCell("g")}}},
+			budget: 10,
+			want:   []int{3, 2},
+		},
+		{
+			name:   "budget 0 returns natural",
+			table:  TableData{Header: []TableCell{mkCell("abc"), mkCell("de")}},
+			budget: 0,
+			want:   []int{3, 2},
+		},
+		{
+			name:   "shrink takes from the widest column, not the leftmost",
+			table:  TableData{Header: []TableCell{mkCell("xy zw"), mkCell("abcd ef")}},
+			budget: 8,
+			want:   []int{4, 4},
+		},
+		{
+			name:   "shrink clamps at the widest unbreakable token",
+			table:  TableData{Header: []TableCell{mkCell("ab cd"), mkCell("xyz")}},
+			budget: 5,
+			want:   []int{2, 3},
+		},
+		{
+			name:   "hard-break reduces floors, largest first, leftmost on ties",
+			table:  TableData{Header: []TableCell{mkCell("abcd"), mkCell("ef")}},
+			budget: 3,
+			want:   []int{1, 2},
+		},
+		{
+			name:   "hard newline splits tokens for the floor",
+			table:  TableData{Header: []TableCell{mkCell("aa\nbbb")}},
+			budget: 3,
+			want:   []int{3},
+		},
+		{
+			name:   "ragged rows: missing cells skipped, extra columns planned",
+			table:  TableData{Header: []TableCell{mkCell("a")}, Rows: [][]TableCell{{mkCell("bb"), mkCell("ccc")}, {mkCell("d")}}},
+			budget: 6,
+			want:   []int{2, 3},
+		},
+		{
+			name:   "empty table",
+			table:  TableData{},
+			budget: 10,
+			want:   nil,
+		},
+		{
+			name:   "budget below the non-empty column count bottoms out at 1 each",
+			table:  TableData{Header: []TableCell{mkCell("aaa"), mkCell("b"), mkCell("cc")}},
+			budget: 1,
+			want:   []int{1, 1, 1},
+		},
+		{
+			name:   "fully empty column stays 0",
+			table:  TableData{Header: []TableCell{mkCell("a"), mkCell("")}, Rows: [][]TableCell{{mkCell("bb")}}},
+			budget: 1,
+			want:   []int{1, 0},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := solveColumnWidths(tc.table, tc.budget); !slices.Equal(got, tc.want) {
+				t.Errorf("solveColumnWidths(budget=%d) = %v, want %v", tc.budget, got, tc.want)
 			}
 		})
 	}
