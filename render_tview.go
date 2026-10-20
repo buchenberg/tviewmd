@@ -37,12 +37,13 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		if blk.Level >= 1 && blk.Level <= 6 {
 			col = opts.Theme.Heading[blk.Level-1]
 		}
-		b.WriteString(tag(col, "", "b"))
-		b.WriteString(renderSegments(blk.Segments, opts))
+		ambient := tag(col, "", "b")
+		b.WriteString(ambient)
+		b.WriteString(renderSegments(blk.Segments, opts, ambient))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	case BlockParagraph:
-		b.WriteString(renderSegments(blk.Segments, opts))
+		b.WriteString(renderSegments(blk.Segments, opts, ""))
 		b.WriteString("\n")
 	case BlockThematicBreak:
 		b.WriteString(tag(opts.Theme.Hr, "", ""))
@@ -53,9 +54,10 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		b.WriteString(renderCode(blk.Code, opts))
 		b.WriteString("\n")
 	case BlockBlockquote:
-		b.WriteString(tag(opts.Theme.QuoteFG, "", "i"))
+		ambient := tag(opts.Theme.QuoteFG, "", "i")
+		b.WriteString(ambient)
 		b.WriteString("▎ ")
-		b.WriteString(renderSegments(blk.Segments, opts))
+		b.WriteString(renderSegments(blk.Segments, opts, ambient))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	case BlockList:
@@ -74,7 +76,7 @@ func renderList(b *strings.Builder, items []ListItem, opts Options, depth int) {
 		}
 		b.WriteString(indent)
 		b.WriteString(marker)
-		b.WriteString(renderSegments(it.Segments, opts))
+		b.WriteString(renderSegments(it.Segments, opts, ""))
 		b.WriteString("\n")
 		if len(it.Children) > 0 {
 			renderList(b, it.Children, opts, depth+1)
@@ -120,8 +122,9 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 	}
 	// Header row (bold).
 	if len(t.Header) > 0 {
-		b.WriteString(tag("", "", "b"))
-		b.WriteString(renderTableRow(t.Header, widths, opts))
+		ambient := tag("", "", "b")
+		b.WriteString(ambient)
+		b.WriteString(renderTableRow(t.Header, widths, opts, ambient))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	}
@@ -143,7 +146,7 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 				padded[i] = row[i]
 			}
 		}
-		b.WriteString(renderTableRow(padded, widths, opts))
+		b.WriteString(renderTableRow(padded, widths, opts, ""))
 		b.WriteString("\n")
 	}
 }
@@ -152,13 +155,13 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 // content is styled via renderSegments; padding is computed from the painted
 // width (segment text plus any link decoration renderSegmentGroup draws) so
 // color tags do not affect column alignment.
-func renderTableRow(cells []TableCell, widths []int, opts Options) string {
+func renderTableRow(cells []TableCell, widths []int, opts Options, ambient string) string {
 	var b strings.Builder
 	for i, c := range cells {
 		if i > 0 {
 			b.WriteString(" ")
 		}
-		content := renderSegments(c.Segments, opts)
+		content := renderSegments(c.Segments, opts, ambient)
 		paintedW := cellPaintedWidth(c)
 		colW := 0
 		if i < len(widths) {
@@ -331,8 +334,9 @@ func colTokenFloor(t TableData, col, natural int) int {
 func renderTableWrapped(b *strings.Builder, t TableData, widths []int, opts Options) {
 	cols := len(widths)
 	if len(t.Header) > 0 {
-		for _, line := range renderWrappedRow(t.Header, widths, opts) {
-			b.WriteString(tag("", "", "b"))
+		ambient := tag("", "", "b")
+		for _, line := range renderWrappedRow(t.Header, widths, opts, ambient) {
+			b.WriteString(ambient)
 			b.WriteString(line)
 			b.WriteString(closeTag())
 			b.WriteString("\n")
@@ -352,7 +356,7 @@ func renderTableWrapped(b *strings.Builder, t TableData, widths []int, opts Opti
 		for i := 0; i < cols && i < len(row); i++ {
 			padded[i] = row[i]
 		}
-		for _, line := range renderWrappedRow(padded, widths, opts) {
+		for _, line := range renderWrappedRow(padded, widths, opts, "") {
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
@@ -645,7 +649,7 @@ func tokenLinePaintedWidth(toks []cellToken) int {
 // explicit token (cellTokens), so appending one here would paint it twice.
 // plain selects the decoration's styling: link color without the underline
 // the label carries.
-func renderTokenGroup(s0 Segment, plain bool, raw string, opts Options) string {
+func renderTokenGroup(s0 Segment, plain bool, raw string, opts Options, ambient string) string {
 	if raw == "" {
 		return ""
 	}
@@ -659,15 +663,15 @@ func renderTokenGroup(s0 Segment, plain bool, raw string, opts Options) string {
 		if plain {
 			flags = ""
 		}
-		return tag(col, "", flags) + text + closeTag()
+		return tag(col, "", flags) + text + closeTag() + ambient
 	}
 	if s0.Code {
-		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag()
+		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag() + ambient
 	}
 	if s0.Style == (Style{}) {
 		return text
 	}
-	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag()
+	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag() + ambient
 }
 
 // renderTokenLine paints one physical line of tokens: consecutive tokens with
@@ -675,7 +679,7 @@ func renderTokenGroup(s0 Segment, plain bool, raw string, opts Options) string {
 // rule as renderSegments -- a tag-shaped bracket pair must be neutralized per
 // line regardless of how goldmark split it), with one space between tokens
 // except where glue says the source had none.
-func renderTokenLine(toks []cellToken, opts Options) string {
+func renderTokenLine(toks []cellToken, opts Options, ambient string) string {
 	var b strings.Builder
 	for i := 0; i < len(toks); {
 		j := i
@@ -693,7 +697,7 @@ func renderTokenLine(toks []cellToken, opts Options) string {
 		if i > 0 && !group[0].glue {
 			b.WriteString(" ")
 		}
-		b.WriteString(renderTokenGroup(group[0].seg, group[0].plain, tb.String(), opts))
+		b.WriteString(renderTokenGroup(group[0].seg, group[0].plain, tb.String(), opts, ambient))
 		i = j + 1
 	}
 	return b.String()
@@ -704,7 +708,7 @@ func renderTokenLine(toks []cellToken, opts Options) string {
 // line pads every cell to that cell's column width so the columns line up on
 // every painted line. Alignment honors the cell's own Align, like the
 // unwrapped renderTableRow.
-func renderWrappedRow(cells []TableCell, widths []int, opts Options) []string {
+func renderWrappedRow(cells []TableCell, widths []int, opts Options, ambient string) []string {
 	cellLines := make([][][]cellToken, len(cells))
 	rowH := 1
 	for i, c := range cells {
@@ -725,7 +729,7 @@ func renderWrappedRow(cells []TableCell, widths []int, opts Options) []string {
 			content := ""
 			pw := 0
 			if p < len(cellLines[i]) {
-				content = renderTokenLine(cellLines[i][p], opts)
+				content = renderTokenLine(cellLines[i][p], opts, ambient)
 				pw = tokenLinePaintedWidth(cellLines[i][p])
 			}
 			colW := 0
@@ -802,14 +806,14 @@ func cellPaintedWidth(c TableCell) int {
 // splits a failed link like "[red]boom" into "[", "red", "]boom", and tview
 // consumes a "[...]" tag shape across segment boundaries, so the full run must
 // be escaped together or the bracket pair would inject a style directive.
-func renderSegments(segs []Segment, opts Options) string {
+func renderSegments(segs []Segment, opts Options, ambient string) string {
 	var b strings.Builder
 	for i := 0; i < len(segs); {
 		j := i
 		for j+1 < len(segs) && sameSegmentTreatment(segs[j], segs[j+1]) {
 			j++
 		}
-		b.WriteString(renderSegmentGroup(segs[i:j+1], opts))
+		b.WriteString(renderSegmentGroup(segs[i:j+1], opts, ambient))
 		i = j + 1
 	}
 	return b.String()
@@ -825,7 +829,7 @@ func sameSegmentTreatment(a, b Segment) bool {
 // concatenated and passed through tview.Escape once, so tag-shaped bracket
 // spans are neutralized regardless of how goldmark split them. Only the tags
 // this function itself emits are left unescaped.
-func renderSegmentGroup(group []Segment, opts Options) string {
+func renderSegmentGroup(group []Segment, opts Options, ambient string) string {
 	var tb strings.Builder
 	for _, s := range group {
 		tb.WriteString(s.Text)
@@ -842,17 +846,18 @@ func renderSegmentGroup(group []Segment, opts Options) string {
 			col = DefaultTheme().Link
 		}
 		if raw == s0.Link {
-			return tag(col, "", "u") + text + closeTag()
+			return tag(col, "", "u") + text + closeTag() + ambient
 		}
-		return tag(col, "", "u") + text + closeTag() + " " + tag(col, "", "") + "(" + tview.Escape(s0.Link) + ")" + closeTag()
+		return tag(col, "", "u") + text + closeTag() + " " +
+			tag(col, "", "") + "(" + tview.Escape(s0.Link) + ")" + closeTag() + ambient
 	}
 	if s0.Code {
-		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag()
+		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag() + ambient
 	}
 	if s0.Style == (Style{}) {
 		return text
 	}
-	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag()
+	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag() + ambient
 }
 
 // tag formats a tview color tag [fg:bg:flags]. Empty fields inherit the

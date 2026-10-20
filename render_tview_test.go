@@ -152,15 +152,22 @@ func TestRenderTViewTrimsTrailingNewline(t *testing.T) {
 // AttrMask (notably the separate underline-style state).
 func cellStyleFor(t *testing.T, tagged string, r rune) (tcell.Style, bool) {
 	t.Helper()
+	return cellStyleForSize(t, tagged, r, 40, 2)
+}
+
+// cellStyleForSize is cellStyleFor with an explicit screen size, for layouts
+// (wrapped tables) that need more rows than the default two.
+func cellStyleForSize(t *testing.T, tagged string, r rune, w, h int) (tcell.Style, bool) {
+	t.Helper()
 	tv := tview.NewTextView().SetDynamicColors(true).SetWrap(true)
 	tv.SetText(tagged)
-	tv.SetRect(0, 0, 40, 2)
+	tv.SetRect(0, 0, w, h)
 	screen := tcell.NewSimulationScreen("")
 	if err := screen.Init(); err != nil {
 		t.Fatalf("sim screen init: %v", err)
 	}
 	t.Cleanup(screen.Fini)
-	screen.SetSize(40, 2)
+	screen.SetSize(w, h)
 	tv.Draw(screen)
 	screen.Show() // flush back buffer to front so GetContents reflects the draw
 	cells, _, _ := screen.GetContents()
@@ -685,4 +692,97 @@ func TestRenderTableAlignsWithEmoji(t *testing.T) {
 			}
 		}
 	}
+}
+
+// requireAttr fails unless style carries attr. It keeps the ambient-style tests
+// honest: comparing against a baseline alone would pass if both sides were
+// equally plain.
+func requireAttr(t *testing.T, what string, style tcell.Style, attr tcell.AttrMask) {
+	t.Helper()
+	if _, _, got := style.Decompose(); got&attr == 0 {
+		t.Errorf("%s lost attribute %v (attrs = %v)", what, attr, got)
+	}
+}
+
+// TestRenderBlockquoteKeepsStyleAfterLink: a blockquote opens an ambient
+// (quote color + italic) style, then inline renderers reset every channel with
+// closeTag(). The italic must be resumed for text after the link, otherwise
+// "tail" renders as ordinary body text inside the quote.
+func TestRenderBlockquoteKeepsStyleAfterLink(t *testing.T) {
+	t.Parallel()
+
+	baseline, ok := cellStyleFor(t, Render("> QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	requireAttr(t, "blockquote baseline", baseline, tcell.AttrItalic)
+
+	got, ok := cellStyleFor(t, Render("> plain *em* [link](u) QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing trailing sentinel after link")
+	}
+	if got != baseline {
+		t.Errorf("quote style not resumed after inline link\n got=%#v\nwant=%#v", got, baseline)
+	}
+}
+
+// TestRenderHeadingKeepsBoldAfterInlineCode: the heading's bold must survive a
+// code span's closeTag and apply to the text that follows it.
+func TestRenderHeadingKeepsBoldAfterInlineCode(t *testing.T) {
+	t.Parallel()
+
+	baseline, ok := cellStyleFor(t, Render("# QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	requireAttr(t, "heading baseline", baseline, tcell.AttrBold)
+
+	got, ok := cellStyleFor(t, Render("# Head `code` QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing trailing sentinel after code span")
+	}
+	if got != baseline {
+		t.Errorf("heading style not resumed after inline code\n got=%#v\nwant=%#v", got, baseline)
+	}
+}
+
+// TestRenderHeaderKeepsBoldAfterLink: a link in the first header cell resets
+// the row's bold, so header text in later cells (and later lines, for the
+// wrapped path) must get it back.
+func TestRenderHeaderKeepsBoldAfterLink(t *testing.T) {
+	t.Parallel()
+
+	const baselineSrc = "| plain | QQQ |\n|---|---|\n| a | b |\n"
+	const linkSrc = "| [link](u) | QQQ |\n|---|---|\n| a | b |\n"
+	const wrappedSrc = "| [l](http://x.yz) QQQ | n |\n|---|---|\n| a | b |\n"
+
+	baseline, ok := cellStyleFor(t, Render(baselineSrc, Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	requireAttr(t, "table header baseline", baseline, tcell.AttrBold)
+
+	t.Run("unwrapped", func(t *testing.T) {
+		t.Parallel()
+		got, ok := cellStyleFor(t, Render(linkSrc, Options{}), 'Q')
+		if !ok {
+			t.Fatal("missing sentinel after link")
+		}
+		if got != baseline {
+			t.Errorf("header bold not resumed after link\n got=%#v\nwant=%#v", got, baseline)
+		}
+	})
+
+	t.Run("wrapped", func(t *testing.T) {
+		t.Parallel()
+		out := Render(wrappedSrc, Options{Width: 16})
+		got, ok := cellStyleForSize(t, out, 'Q', 60, 10)
+		if !ok {
+			t.Fatalf("missing sentinel in wrapped header:\n%s", out)
+		}
+		if got != baseline {
+			t.Errorf("wrapped header bold not resumed after decoration\n got=%#v\nwant=%#v\noutput:\n%s",
+				got, baseline, out)
+		}
+	})
 }
