@@ -393,6 +393,14 @@ func TestCellPlainWidthCountsEmojiPresentation(t *testing.T) {
 			cell: TableCell{Segments: []Segment{{Text: "\u270d"}, {Text: "\ufe0f"}}},
 			want: 2,
 		},
+		{
+			// VS15 asks for text presentation, so the same base rune stays a
+			// one-cell cluster; the oracle must not promote every variation
+			// selector to two cells.
+			name: "text presentation sequence",
+			cell: TableCell{Segments: []Segment{{Text: "\u270d\ufe0e"}}},
+			want: 1,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

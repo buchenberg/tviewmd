@@ -143,7 +143,7 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 
 // renderTableRow emits one row as space-separated, padded cells. The visible
 // content is styled via renderSegments; padding is computed from the painted
-// width (segment text plus any link decoration renderSegmentGroup draws) so
+// width (segment text plus any link decoration renderSegments draws) so
 // color tags do not affect column alignment.
 func renderTableRow(cells []TableCell, widths []int, opts Options, ambient string) string {
 	var b strings.Builder
@@ -218,7 +218,7 @@ func solveColumnWidths(t TableData, budget int) []int {
 	}
 	floors := make([]int, len(natural))
 	for i := range floors {
-		floors[i] = colTokenFloor(t, i, natural[i])
+		floors[i] = colTokenFloor(t, i)
 	}
 	// Soft shrink, then hard-break. In both phases stepReduce takes one cell
 	// per pass from the widest column still above its limit -- the floors for
@@ -284,12 +284,16 @@ func maxContentWidths(t TableData) []int {
 // decorations count exactly as they paint (a URL never shrinks until the
 // hard-break phase) and token boundaries match the wrapper's own splitting;
 // a strings.Fields-style split would disagree on non-ASCII whitespace and
-// would miss decorations entirely. natural (the column's max-content width)
-// decides emptiness: a column that paints nothing floors at 0, while any
-// column that paints something floors at 1.
-func colTokenFloor(t TableData, col, natural int) int {
+// would miss decorations entirely. Emptiness is decided from the cells' painted
+// width: a column that paints nothing floors at 0, while any column that paints
+// something floors at 1.
+func colTokenFloor(t TableData, col int) int {
 	widest := 0
+	paints := false
 	measure := func(c TableCell) {
+		if cellPaintedWidth(c) > 0 {
+			paints = true
+		}
 		run := 0
 		for _, tok := range cellTokens(c) {
 			tw := uniseg.StringWidth(tok.text)
@@ -310,7 +314,9 @@ func colTokenFloor(t TableData, col, natural int) int {
 			measure(row[col])
 		}
 	}
-	if natural == 0 {
+	// An empty column has no floor; a column that paints anything floors at 1
+	// so a non-empty column is never hidden entirely.
+	if !paints {
 		return 0
 	}
 	return max(widest, 1)
@@ -730,6 +736,9 @@ func renderWrappedRow(cells []TableCell, widths []int, opts Options, ambient str
 // see (1 + 0 = 1). Under-counting a column makes every row that contains such a
 // cell one cell wider than its separator, so borders come out ragged.
 //
+// The unit of measurement is the grapheme cluster, never a single cell: a
+// cluster is the smallest thing a terminal paints, so a cluster that occupies
+// two columns is counted as two and one that occupies one is counted as one.
 // The segments are joined before measuring so a cluster split across segment
 // boundaries (for example a combining mark that starts a new segment) is still
 // measured once.
@@ -770,6 +779,11 @@ func cellPaintedWidth(c TableCell) int {
 // splits a failed link like "[red]boom" into "[", "red", "]boom", and tview
 // consumes a "[...]" tag shape across segment boundaries, so the full run must
 // be escaped together or the bracket pair would inject a style directive.
+//
+// A link's visible " (url)" decoration is emitted here, once per link run,
+// after the run's last group: a label with inline styling is several treatment
+// groups but still one link. The ambient block style is resumed after the
+// decoration, whose own closeTag would otherwise reset it.
 func renderSegments(segs []Segment, opts Options, ambient string) string {
 	var b strings.Builder
 	runStart := 0
