@@ -26,11 +26,17 @@ import (
 //
 // A Renderer is safe for concurrent use: Append and Write are serialized
 // against String, Source, and Reset, so a producer goroutine can stream tokens
-// in while another goroutine flushes the rendered output. In a tview app, call
-// String from a QueueUpdateDraw callback to publish the result. Note that
-// QueueUpdateDraw must not be called from the event-loop goroutine itself — it
-// blocks until the callback has run, which that same goroutine would have to
-// do, so it deadlocks; call QueueUpdate instead when you are already on it.
+// in while another goroutine flushes the rendered output. In a tview app, the
+// usual pattern is to flush from a QueueUpdateDraw callback, which runs on the
+// event-loop goroutine, and assign the result directly:
+//
+//	app.QueueUpdateDraw(func() { tv.SetText(r.String()) })
+//
+// Do not call QueueUpdateDraw — or QueueUpdate, which waits for the event loop
+// just the same — from inside an event-loop callback: the loop cannot run the
+// queued function while it is executing the current one, so the call
+// deadlocks. When you are already on that goroutine, update the TextView
+// directly.
 type Renderer struct {
 	mu sync.Mutex
 
