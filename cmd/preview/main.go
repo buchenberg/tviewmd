@@ -8,6 +8,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -15,12 +16,17 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rivo/uniseg"
 
 	"github.com/buchenberg/tviewmd"
 )
 
 func main() {
-	width, filter := parseArgs(os.Args[1:])
+	width, filter, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "preview: %v\n", err)
+		os.Exit(2)
+	}
 
 	shown := 0
 	for _, s := range samples() {
@@ -42,15 +48,22 @@ func main() {
 // defaultWidth is the paint width used when no numeric argument is given.
 const defaultWidth = 100
 
+// errBadWidth rejects a width that no simulation screen can be allocated with.
+var errBadWidth = errors.New("width must be positive")
+
 // parseArgs interprets the command line: an optional leading width, then an
 // optional sample-name filter. A leading argument that is not an integer is the
 // filter, so `go run ./cmd/preview docs` filters to "docs" instead of the
 // argument being silently dropped; a width can still be given first
-// (`go run ./cmd/preview 120 docs`).
-func parseArgs(args []string) (width int, filter string) {
+// (`go run ./cmd/preview 120 docs`). A non-positive width is rejected: a
+// simulation screen cannot be allocated with no columns.
+func parseArgs(args []string) (width int, filter string, err error) {
 	width = defaultWidth
 	if len(args) > 0 {
-		if n, err := strconv.Atoi(args[0]); err == nil {
+		if n, convErr := strconv.Atoi(args[0]); convErr == nil {
+			if n <= 0 {
+				return 0, "", fmt.Errorf("%w, got %d", errBadWidth, n)
+			}
 			width = n
 			args = args[1:]
 		}
@@ -58,7 +71,7 @@ func parseArgs(args []string) (width int, filter string) {
 	if len(args) > 0 {
 		filter = args[0]
 	}
-	return width, filter
+	return width, filter, nil
 }
 
 // paint renders src the way the TUI does — tagged text into a wrapping
@@ -87,9 +100,13 @@ func paint(src string, w, h int) []string {
 				b.WriteByte(' ')
 				continue
 			}
-			// A double-width glyph paints one bytes-cell plus a filler cell
-			// that tcell never writes; the space below is its second column.
+			// A wide glyph owns its columns: tcell stores it in the first cell
+			// and leaves the continuation cells empty. Write the glyph once and
+			// skip those cells, or the dump would add a phantom space and
+			// misalign the Unicode sample.
+			glyphW := uniseg.StringWidth(string(c.Bytes))
 			b.Write(c.Bytes)
+			col += max(glyphW, 1) - 1
 		}
 		rows[row] = strings.TrimRight(b.String(), " ")
 	}
