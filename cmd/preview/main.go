@@ -13,9 +13,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/buchenberg/tviewmd"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	"github.com/buchenberg/tviewmd"
 )
 
 func main() {
@@ -110,7 +111,7 @@ func samples() []sample {
 		{"prose", proseTable},
 		{"links", linkTable},
 		{"unicode", unicodeTable},
-		{"long-token", longTokenTable},
+		{"long-token", longWordTable},
 		{"many-rows", manyRowsTable},
 		{"document", document},
 	}
@@ -133,6 +134,7 @@ const wideTable = `| Role | Provider | Model | Turns | Tools | Tokens | $ cost |
 | counter | zai | GLM-5.3-Flash | 2 | 1 | 1,204 | 0.001 | ok |
 `
 
+//nolint:lll // Sample table rows are deliberately wider than the linter limit.
 const proseTable = `| Phase | What happens | What goes wrong |
 |-------|--------------|-----------------|
 | Dispatch | The orchestrator selects a role, builds the system prompt from the role file plus the environment header, and forks a worktree from the current HEAD so the sub-agent cannot disturb the parent tree while it works. | The fork point is the tree *at dispatch time*, so a long running sub-agent reviews code that has since moved; proposals then need a three-way merge instead of a fast-forward. |
@@ -141,6 +143,7 @@ const proseTable = `| Phase | What happens | What goes wrong |
 | Settlement | Select fast-forwards when the parent has not moved; apply three-way merges when it has. Both fail closed rather than leaving a half-applied tree. | A settlement that races with an editor save on the same file can fail closed, and the work is then only recoverable by re-dispatching the whole task. |
 `
 
+//nolint:lll // Sample table rows are deliberately wider than the linter limit.
 const linkTable = `| Document | Summary | Path |
 |----------|---------|------|
 | [architecture](docs/architecture.md) | Runtime design: the loop, the event seam, and how consumers attach | docs/architecture.md |
@@ -157,7 +160,8 @@ const unicodeTable = `| ロール | 説明 | 状態 | Emoji |
 | 監査 | 脆弱性、秘密情報、危険なパターンをスキャンします | 稼働中 | 🔄 |
 `
 
-const longTokenTable = `| Endpoint | Redirect target | Notes |
+//nolint:lll // Sample table rows are deliberately wider than the linter limit.
+const longWordTable = `| Endpoint | Redirect target | Notes |
 |----------|-----------------|-------|
 | /v1/completions | https://api.example.com/v1/chat/completions?stream=true&model=glm-5.3-flash | passthrough |
 | /v1/long | supercalifragilisticexpialidociousness_and_then_some_more_letters_to_force_a_hard_break | no spaces at all |

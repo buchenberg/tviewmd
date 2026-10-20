@@ -89,7 +89,9 @@ func renderCode(cb CodeBlock, opts Options) string {
 	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(source) + closeTag()
 }
 
-//nolint:gocognit // Column widths, separators and padding are laid out together; splitting scatters the rules.
+// renderTable paints a table: the bold header row, the separator, then the
+// body. Column widths come from the max-content plan or, when Options.Width
+// constrains it, from the wrapped layout below.
 func renderTable(b *strings.Builder, t TableData, opts Options) {
 	widths := maxContentWidths(t)
 	cols := len(widths)
