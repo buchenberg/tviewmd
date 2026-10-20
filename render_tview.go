@@ -95,12 +95,12 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 	widths := make([]int, cols)
 	for i, c := range t.Header {
 		if i < cols {
-			widths[i] = max(widths[i], cellPlainWidth(c))
+			widths[i] = max(widths[i], cellPaintedWidth(c))
 		}
 	}
 	for _, row := range t.Rows {
 		for i := 0; i < cols && i < len(row); i++ {
-			widths[i] = max(widths[i], cellPlainWidth(row[i]))
+			widths[i] = max(widths[i], cellPaintedWidth(row[i]))
 		}
 	}
 	// Header row (bold).
@@ -134,8 +134,9 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 }
 
 // renderTableRow emits one row as space-separated, padded cells. The visible
-// content is styled via renderSegments; padding is computed from the plain-text
-// width so color tags do not affect column alignment.
+// content is styled via renderSegments; padding is computed from the painted
+// width (segment text plus any link decoration renderSegmentGroup draws) so
+// color tags do not affect column alignment.
 func renderTableRow(cells []TableCell, widths []int, opts Options) string {
 	var b strings.Builder
 	for i, c := range cells {
@@ -143,12 +144,12 @@ func renderTableRow(cells []TableCell, widths []int, opts Options) string {
 			b.WriteString(" ")
 		}
 		content := renderSegments(c.Segments, opts)
-		plainW := cellPlainWidth(c)
+		paintedW := cellPaintedWidth(c)
 		colW := 0
 		if i < len(widths) {
 			colW = widths[i]
 		}
-		left, right := alignPad(c.Align, plainW, colW)
+		left, right := alignPad(c.Align, paintedW, colW)
 		b.WriteString(strings.Repeat(" ", left))
 		b.WriteString(content)
 		b.WriteString(strings.Repeat(" ", right))
@@ -199,6 +200,40 @@ func cellPlainWidth(c TableCell) int {
 		b.WriteString(s.Text)
 	}
 	return uniseg.StringWidth(b.String())
+}
+
+// cellPaintedWidth returns the display width of everything a cell paints, not
+// just its segment text: renderSegmentGroup appends a visible " (url)"
+// decoration after any link group whose label differs from its target, so a
+// column planned from cellPlainWidth alone comes out one decoration narrower
+// than the rows actually painted in it, and header, separator and body rows
+// stop lining up. This is a paint/measure coupling: layout must measure
+// exactly the glyphs the renderer draws, so this function walks the same
+// sameSegmentTreatment groups renderSegments walks and applies
+// renderSegmentGroup's decoration condition verbatim (link set, group text
+// non-empty, group text != target). The decoration is measured in its
+// unescaped form -- tview.Escape doubles '[' in the string while the screen
+// paints a single '[' -- and uniseg keeps the count cluster-aware, matching
+// the oracle tview/tcell paint with.
+func cellPaintedWidth(c TableCell) int {
+	w := cellPlainWidth(c)
+	for i := 0; i < len(c.Segments); {
+		j := i
+		for j+1 < len(c.Segments) && sameSegmentTreatment(c.Segments[j], c.Segments[j+1]) {
+			j++
+		}
+		group := c.Segments[i : j+1]
+		var b strings.Builder
+		for _, s := range group {
+			b.WriteString(s.Text)
+		}
+		raw := b.String()
+		if raw != "" && group[0].Link != "" && raw != group[0].Link {
+			w += uniseg.StringWidth(" (" + group[0].Link + ")")
+		}
+		i = j + 1
+	}
+	return w
 }
 
 // renderSegments emits inline content for a block/cell. Adjacent segments that

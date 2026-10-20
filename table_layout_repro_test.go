@@ -95,18 +95,21 @@ func TestTableLinkDecorationKeepsRowAligned(t *testing.T) {
 	t.Parallel()
 
 	src := "" +
-		"| Link | Plain |\n" +
-		"|------|-------|\n" +
-		"| [docs](https://example.com/some/very/long/path) | x |\n"
+		"| Link | Note |\n" +
+		"|------|------|\n" +
+		"| [docs](https://example.com/some/very/long/path) | text |\n"
 	out := Render(src, Options{})
 	ws := screenRowWidths(t, out, 120, 8) // wrap disabled: pure width comparison
 
-	// Row 0 = header, row 1 = separator, row 2 = body.
+	// Row 0 = header, row 1 = separator, row 2 = body. The final column is
+	// deliberately equal-width in every row ("Note"/"text"), so the invariant
+	// "all rows paint to the same extent" is expressible: screenRowWidths
+	// measures up to the last non-space cell and cannot see trailing padding.
 	if ws[0] == 0 || ws[2] == 0 {
 		t.Fatalf("screen rows missing: widths = %v", ws)
 	}
-	if ws[0] != ws[2] {
-		t.Errorf("header row paints %d cells but body row paints %d — the (url) decoration is not measured:\n%s",
-			ws[0], ws[2], out)
+	if ws[0] != ws[2] || ws[1] != ws[0] {
+		t.Errorf("header row paints %d cells, separator %d, body %d — the (url) decoration is not measured:\n%s",
+			ws[0], ws[1], ws[2], out)
 	}
 }
