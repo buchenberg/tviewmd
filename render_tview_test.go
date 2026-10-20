@@ -578,6 +578,9 @@ func TestCellTokensDecorationAfterLinkText(t *testing.T) {
 	if !sameSegmentTreatment(got[0].seg, got[1].seg) {
 		t.Errorf("link text and decoration do not share treatment; the decoration would not paint in the link colour")
 	}
+	if !got[1].plain {
+		t.Errorf("decoration token is not plain; appendDecoration must set plain so the label's underline stays off the URL")
+	}
 }
 
 // TestPreSplitWideTokensKeepsPlainFlag pins a review finding: a decoration
