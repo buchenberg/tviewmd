@@ -26,7 +26,7 @@ coverage:
 
 # Run fuzz tests (60s fuzz time, 10s minimize time)
 fuzz:
-	$(GOTEST) -fuzz=FuzzParse -fuzztime=60s -fuzzminimizetime=10s ./...
+	$(GOTEST) -fuzz=FuzzParse -fuzztime=60s -fuzzminimizetime=10s .
 
 # Lint code
 lint:
