@@ -653,6 +653,93 @@ func screenRowWidths(t *testing.T, tagged string, w, h int) []int {
 	return widths
 }
 
+// TestRenderLinkDecorationOncePerRun: a link label that goldmark splits into
+// several style runs ("[**bold** text](url)") is still one link. Its visible
+// target must be printed exactly once, after the whole label -- not once per
+// run, and not in the middle of a word.
+func TestRenderLinkDecorationOncePerRun(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, src, visible string }{
+		{"styled label", "[**bold** text](url)", "bold text (url)"},
+		{"styled label mid-word", "[**do**cs](u)", "docs (u)"},
+		{"thin label", "[**u**](u)", "u"},
+		{"styled autolink label", "[**https://x**](https://x)", "https://x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := Render(tc.src, Options{})
+			if got := stripTags(out); got != tc.visible {
+				t.Errorf("Render(%q) paints %q, want %q\nraw: %s", tc.src, got, tc.visible, out)
+			}
+		})
+	}
+}
+
+// TestCellTokensDecorationAfterStyledLabelRun: the wrapped layout must place the
+// decoration after the run's last word, not between the styled fragments, and
+// must still glue the fragments together.
+func TestCellTokensDecorationAfterStyledLabelRun(t *testing.T) {
+	t.Parallel()
+
+	cell := TableCell{Segments: []Segment{
+		{Text: "do", Link: "u", Style: Style{Bold: true}},
+		{Text: "cs", Link: "u"},
+	}}
+	toks := cellTokens(cell)
+	want := []string{"do", "cs", "(u)"}
+	if len(toks) != len(want) {
+		t.Fatalf("cellTokens = %v, want %v", gotTexts(toks), want)
+	}
+	for i, w := range want {
+		if toks[i].text != w {
+			t.Errorf("token %d = %q, want %q (full: %v)", i, toks[i].text, w, gotTexts(toks))
+		}
+	}
+	if !toks[1].glue {
+		t.Errorf("label fragments split: %v", gotTexts(toks))
+	}
+	if toks[2].glue {
+		t.Errorf("decoration must paint its own separating space: %v", gotTexts(toks))
+	}
+}
+
+// TestCellPaintedWidthCountsOneDecorationPerRun guards the paint/measure
+// coupling for styled labels: measuring per treatment group would budget two
+// decorations for one link and push later columns out of alignment.
+func TestCellPaintedWidthCountsOneDecorationPerRun(t *testing.T) {
+	t.Parallel()
+
+	cell := TableCell{Segments: []Segment{
+		{Text: "bold", Link: "url", Style: Style{Bold: true}},
+		{Text: " text", Link: "url"},
+	}}
+	// "bold text" is 9 cells; " (url)" is 6.
+	if got, want := cellPaintedWidth(cell), 15; got != want {
+		t.Errorf("cellPaintedWidth = %d, want %d", got, want)
+	}
+}
+
+// TestRenderWrappedStyledLinkLabel: the same rule through the wrapped painter,
+// at a width that forces the row to reflow.
+func TestRenderWrappedStyledLinkLabel(t *testing.T) {
+	t.Parallel()
+
+	src := "| [**do**cs](u) xx |\n|---|---|\n| a | b |\n"
+	out := Render(src, Options{Width: 10})
+	visible := stripTags(out)
+	if strings.Count(visible, "(u)") != 1 {
+		t.Errorf("decoration painted %d times, want once:\n%s", strings.Count(visible, "(u)"), visible)
+	}
+	if !strings.Contains(visible, "docs") {
+		t.Errorf("label fragments not glued back together:\n%s", visible)
+	}
+	if strings.Contains(visible, "do (u)") {
+		t.Errorf("decoration landed inside the word:\n%s", visible)
+	}
+}
+
 // TestRenderTableAlignsWithEmoji guards the table layout against emoji that are
 // two columns wide. Padding is planned from cellPlainWidth, but tview paints
 // grapheme clusters, so an under-measured column makes every row containing it
