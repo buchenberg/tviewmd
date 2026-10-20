@@ -37,6 +37,12 @@ func DefaultTheme() Theme {
 type Options struct {
 	// Width is the horizontal-rule length and the table layout budget. 0 means
 	// 80 for rules and max-content (no constrained layout) for tables.
+	//
+	// Tables are planned when text is rendered, not when it is painted: their
+	// column widths are baked into the returned tag string. Callers that want
+	// tables to track the terminal width must re-render with an updated Width
+	// when the available width changes; resizing the TextView alone only
+	// re-wraps the already-planned table as prose.
 	Width int
 
 	// Theme is the color theme. The zero value uses DefaultTheme().

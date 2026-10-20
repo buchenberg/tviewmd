@@ -198,6 +198,16 @@ output := tviewmd.Render(markdown, tviewmd.Options{
 })
 ```
 
+Tables are planned at render time: the column widths are baked into the
+returned tag string. Re-render with an updated `Width` when the terminal size
+changes; resizing the `TextView` alone only re-wraps the already-planned table
+as prose.
+
+```go
+// On tview's resize event, re-render the accumulated source:
+textView.SetText(tviewmd.Render(src, tviewmd.Options{Width: width}))
+```
+
 ### Two-Phase Parsing and Rendering
 
 For advanced use cases where you want to inspect or transform the parsed structure:
@@ -241,7 +251,8 @@ output := tviewmd.RenderTView(blocks, tviewmd.Options{})
 
 ```go
 type Options struct {
-    // Width for horizontal rules and table sizing (default: 80)
+    // Width for horizontal rules and the table layout budget (default: 80).
+    // Tables are planned at render time; re-render on resize.
     Width int
 
     // Custom color theme (default: DefaultTheme())
