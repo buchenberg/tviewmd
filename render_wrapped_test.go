@@ -123,6 +123,42 @@ func TestLinkColorFallsBackToDefault(t *testing.T) {
 	}
 }
 
+// TestTokenLineWidthAgreesWithPaint pins the paint/measure pair: the row
+// planner pads against tokenLinePaintedWidth, so it must count exactly the
+// cells renderTokenLine emits for the same tokens -- including glue, the link
+// decoration token, and code spans.
+func TestTokenLineWidthAgreesWithPaint(t *testing.T) {
+	t.Parallel()
+
+	theme := DefaultTheme()
+	cases := []struct {
+		name string
+		cell TableCell
+	}{
+		{"styled linked word", TableCell{Segments: []Segment{
+			{Text: "do", Link: "u", Style: Style{Bold: true}},
+			{Text: "cs", Link: "u"},
+		}}},
+		{"plain words", mkCell("aa bb")},
+		{"code span", TableCell{Segments: []Segment{
+			{Text: "x", Code: true},
+			{Text: " tail"},
+		}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			toks := cellTokens(tc.cell)
+			painted := renderTokenLine(toks, Options{Theme: theme}, "")
+			got := uniseg.StringWidth(stripTags(painted))
+			if want := tokenLinePaintedWidth(toks); got != want {
+				t.Errorf("painted %d cells, measured %d\ntokens: %v\npainted: %q",
+					got, want, gotTexts(toks), painted)
+			}
+		})
+	}
+}
+
 // TestWrapUnitsSplitsOversizeWord: when a glued word cannot fit a column at
 // all, the units fall back to one fragment each so the greedy pass can split
 // it where it must.
