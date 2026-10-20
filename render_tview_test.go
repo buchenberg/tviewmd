@@ -391,6 +391,79 @@ func mkCell(text string) TableCell {
 	return TableCell{Segments: []Segment{{Text: text}}}
 }
 
+// TestCellTokensPreservesMultibyteText: token text must be a byte-exact slice
+// of the source. Building it byte-by-byte via string(byte) would re-encode
+// each byte as a rune and turn "caf\u00e9" into "caf\u00c3\u00a9".
+func TestCellTokensPreservesMultibyteText(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{"caf\u00e9", "na\u00efve d\u00e9cor", "\u4f60\u597d \u4e16\u754c", "\u270d\ufe0f ok"} {
+		got := cellTokens(mkCell(text))
+		var joined strings.Builder
+		for i, tok := range got {
+			if i > 0 && !tok.glue {
+				joined.WriteString(" ")
+			}
+			joined.WriteString(tok.text)
+		}
+		if want := strings.Join(strings.Fields(text), " "); joined.String() != want {
+			t.Errorf("cellTokens(%q) rejoined to %q, want %q", text, joined.String(), want)
+		}
+	}
+}
+
+// TestWrapTokensChargesGapOnlyMidLine: the painted space between tokens is
+// only paid when something precedes the token on its line. Charging it to a
+// line-initial token shrinks every line's usable width by one and splits
+// content that fits exactly ("aa bb" in a 5-cell column).
+func TestWrapTokensChargesGapOnlyMidLine(t *testing.T) {
+	t.Parallel()
+
+	lines := wrapTokens([]cellToken{{text: "aa"}, {text: "bb"}}, 5)
+	if len(lines) != 1 || len(lines[0]) != 2 {
+		t.Fatalf("wrapTokens(aa bb, width 5) = %v lines, want one line of two tokens", lines)
+	}
+}
+
+// TestWrapTokensMovesWholeWord: glued tokens are fragments of one word split
+// at style boundaries; the whole word must move to the next line when it fits
+// there, instead of leaving fragments behind ("a bo" / "ld").
+func TestWrapTokensMovesWholeWord(t *testing.T) {
+	t.Parallel()
+
+	toks := []cellToken{{text: "a"}, {text: "bo"}, {text: "ld", glue: true}}
+	lines := wrapTokens(toks, 4)
+	if len(lines) != 2 {
+		t.Fatalf("wrapTokens(a bo ld, width 4) = %d lines, want 2", len(lines))
+	}
+	if len(lines[0]) != 1 || lines[0][0].text != "a" {
+		t.Errorf("first line = %v, want [a]", lines[0])
+	}
+	if len(lines[1]) != 2 || lines[1][0].text != "bo" || lines[1][1].text != "ld" {
+		t.Errorf("second line = %v, want [bo ld] (whole word)", lines[1])
+	}
+}
+
+// TestSolveColumnWidthsCountsDecorationFloor: a link decoration is an
+// unbreakable run, so it belongs in the column floor. With a 10-cell
+// decoration in column 1 the solver must prefer the balanced [10 8] plan over
+// cramming column 1 to [9 9] and cluster-splitting the URL for one cell.
+func TestSolveColumnWidthsCountsDecorationFloor(t *testing.T) {
+	t.Parallel()
+
+	table := TableData{
+		Header: []TableCell{
+			{Segments: []Segment{{Text: "docs", Link: "http://x"}}},
+			mkCell("aaa bbb ccc"),
+		},
+	}
+	got := solveColumnWidths(table, 18)
+	want := []int{10, 8}
+	if !slices.Equal(got, want) {
+		t.Errorf("solveColumnWidths(budget 18) = %v, want %v (decoration is unbreakable)", got, want)
+	}
+}
+
 // TestSolveColumnWidths covers the column-budget planner: max-content widths
 // when they fit, widest-first shrinking clamped at unbreakable-token floors,
 // hard-breaking the floors when even they overflow, and the degenerate budgets

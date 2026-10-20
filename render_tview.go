@@ -108,7 +108,12 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 	// fit it; when the plan differs from max-content, rows re-flow as
 	// multi-line grids instead of leaving tview to fold them as prose.
 	if opts.Width > 0 {
-		if planned := solveColumnWidths(t, opts.Width-(cols-1)); !slices.Equal(planned, widths) {
+		// A width budget below the separator overhead still constrains the
+		// table to the narrowest legal plan (all columns at 1) rather than
+		// silently falling back to max-content: solveColumnWidths reads a
+		// budget of 0 as "no constraint", which is the unset-Width sentinel.
+		budget := max(opts.Width-(cols-1), 1)
+		if planned := solveColumnWidths(t, budget); !slices.Equal(planned, widths) {
 			renderTableWrapped(b, t, planned, opts)
 			return
 		}
@@ -280,25 +285,29 @@ func naturalColumnWidths(t TableData) []int {
 	return widths
 }
 
-// colTokenFloor returns the width of the widest unbreakable token in column
-// col -- the width a TextView can never wrap below, since it breaks between
-// whitespace-separated runs, not inside them. Token widths use uniseg, so
-// they are cluster-aware exactly like cellPlainWidth. natural (the column's
-// max-content width) decides emptiness: a column with no content anywhere
-// floors at 0 so it claims no budget and gets no padding, while any column
-// that paints something floors at 1, the smallest useful column.
+// colTokenFloor returns the width of the widest unbreakable run in column col
+// -- the width a wrapped layout cannot go below, since it breaks between
+// words, not inside them. Runs are measured from cellTokens, so link
+// decorations count exactly as they paint (a URL never shrinks until the
+// hard-break phase) and token boundaries match the wrapper's own splitting;
+// a strings.Fields-style split would disagree on non-ASCII whitespace and
+// would miss decorations entirely. natural (the column's max-content width)
+// decides emptiness: a column that paints nothing floors at 0, while any
+// column that paints something floors at 1.
 func colTokenFloor(t TableData, col, natural int) int {
 	widest := 0
 	measure := func(c TableCell) {
-		var b strings.Builder
-		for _, s := range c.Segments {
-			b.WriteString(s.Text)
+		run := 0
+		for _, tok := range cellTokens(c) {
+			tw := uniseg.StringWidth(tok.text)
+			if tok.glue {
+				run += tw // glued fragments continue the same unbreakable word
+				continue
+			}
+			widest = max(widest, run)
+			run = tw
 		}
-		// Fields splits on all whitespace, "\n" included, so hard-wrapped
-		// cell text cannot smuggle one token across a line break.
-		for _, tok := range strings.Fields(b.String()) {
-			widest = max(widest, uniseg.StringWidth(tok))
-		}
+		widest = max(widest, run)
 	}
 	if col < len(t.Header) {
 		measure(t.Header[col])
@@ -359,10 +368,11 @@ func renderTableWrapped(b *strings.Builder, t TableData, widths []int, opts Opti
 // space painted before it and must not be separated from its predecessor by
 // wrapping unless nothing else fits.
 type cellToken struct {
-	text string
-	seg  Segment
-	pre  bool
-	glue bool
+	text  string
+	seg   Segment
+	pre   bool
+	glue  bool
+	plain bool // decoration token: link color without the label's underline
 }
 
 // isASCIISpaceByte reports whether b is an ASCII whitespace byte. Non-ASCII
@@ -386,7 +396,7 @@ func isASCIISpaceByte(b byte) bool {
 // renderSegmentGroup would paint them, using its condition verbatim.
 func cellTokens(c TableCell) []cellToken {
 	var toks []cellToken
-	var open *cellToken
+	var open *openToken
 	carryGlue := false
 	pendingBreak := false
 	// groupText accumulates the raw (untrimmed) text of the current
@@ -399,19 +409,16 @@ func cellTokens(c TableCell) []cellToken {
 			// belongs to that group and must be flushed BEFORE the group's
 			// decoration token is appended: the decoration paints after the
 			// link text it labels, never before it.
-			if open != nil {
-				toks = append(toks, *open)
-				open = nil
-			}
+			toks = flushOpen(toks, open)
+			open = nil
 			appendDecoration(&toks, groupText.String(), c.Segments[si-1])
 			groupText.Reset()
 		}
 		groupText.WriteString(s.Text)
 		toks, open, pendingBreak, carryGlue = scanSegmentTokens(toks, open, s, pendingBreak, carryGlue)
 	}
-	if open != nil {
-		toks = append(toks, *open)
-	}
+	// Flush the final group; the carry's life ends here, so no reseat.
+	toks = flushOpen(toks, open)
 	if n := len(c.Segments); n > 0 {
 		appendDecoration(&toks, groupText.String(), c.Segments[n-1])
 	}
@@ -421,30 +428,51 @@ func cellTokens(c TableCell) []cellToken {
 // appendDecoration appends a group's link decoration token when
 // renderSegmentGroup's emission condition holds (group text non-empty, link
 // set, and the text not the bare link target). Mirroring that condition
-// verbatim keeps measurement and paint coupled.
+// verbatim keeps measurement and paint coupled. The token is plain: the
+// fast path paints the decoration in the link color without the label's
+// underline, and the wrapped layout must match.
 func appendDecoration(toks *[]cellToken, raw string, seg Segment) {
 	if raw != "" && seg.Link != "" && raw != seg.Link {
-		*toks = append(*toks, cellToken{text: "(" + seg.Link + ")", seg: seg})
+		plain := cellToken{text: "(" + seg.Link + ")", seg: seg, plain: true}
+		*toks = append(*toks, plain)
 	}
+}
+
+// openToken is the token currently being assembled by scanSegmentTokens. Its
+// text buffers byte-exactly: a strings.Builder copies the source bytes, while
+// converting a single byte to a string would re-encode its value as a rune
+// and corrupt every multi-byte sequence ("caf\u00e9" -> "caf\u00c3\u00a9").
+type openToken struct {
+	seg       Segment
+	pre, glue bool
+	b         strings.Builder
+}
+
+// flushOpen appends the open token, if any, to toks; the caller clears the
+// carry by assigning nil.
+func flushOpen(toks []cellToken, open *openToken) []cellToken {
+	if open == nil {
+		return toks
+	}
+	tok := cellToken{text: open.b.String(), seg: open.seg, pre: open.pre, glue: open.glue}
+	return append(toks, tok)
 }
 
 // scanSegmentTokens consumes one segment's text into tokens, threading the
 // carry state across segment boundaries: open is the token under
 // construction (nil at a word boundary), carryGlue says the next token would
 // continue the current word with no source whitespace between (a mid-word
-// style change: the boundary flush above already split it, and the new token
-// glues so no phantom space appears), and pendingBreak says a "\n" is
-// waiting to force a break before the next token.
+// style change: the boundary flush in cellTokens already split it, and the
+// new token glues so no phantom space appears), and pendingBreak says a
+// "\n" is waiting to force a break before the next token.
 func scanSegmentTokens(
-	toks []cellToken, open *cellToken, s Segment, pendingBreak, carryGlue bool,
-) ([]cellToken, *cellToken, bool, bool) {
+	toks []cellToken, open *openToken, s Segment, pendingBreak, carryGlue bool,
+) ([]cellToken, *openToken, bool, bool) {
 	for i := 0; i < len(s.Text); i++ {
 		ch := s.Text[i]
 		if isASCIISpaceByte(ch) {
-			if open != nil {
-				toks = append(toks, *open)
-				open = nil
-			}
+			toks = flushOpen(toks, open)
+			open = nil
 			if ch == '\n' {
 				pendingBreak = true
 			}
@@ -452,10 +480,10 @@ func scanSegmentTokens(
 			continue
 		}
 		if open == nil {
-			open = &cellToken{seg: s, pre: pendingBreak, glue: carryGlue}
+			open = &openToken{seg: s, pre: pendingBreak, glue: carryGlue}
 			pendingBreak = false
 		}
-		open.text += string(ch)
+		open.b.WriteByte(ch)
 		carryGlue = true
 	}
 	return toks, open, pendingBreak, carryGlue
@@ -494,35 +522,76 @@ func splitWideToken(text string, width int) []string {
 	return chunks
 }
 
+// wrapUnit is one placement unit for the line builder: a complete word --
+// possibly assembled from several style-fragment tokens joined by glue -- or a
+// single fragment when the word is too wide for the column. Moving glued
+// fragments as one unit keeps styled words whole whenever a legal plan holds
+// them ("**bo**ld" never emits "a bo" / "ld").
+type wrapUnit struct {
+	toks []cellToken
+	w    int // painted width; glued fragments touch, so no inner gaps
+	glue bool
+	pre  bool
+}
+
+// wrapUnits groups tokens into placement units: consecutive glued tokens are
+// fragments of one word and must move together when the word fits a line. A
+// word wider than the column falls back to one unit per fragment, letting the
+// greedy pass split it where it must.
+func wrapUnits(toks []cellToken, width int) []wrapUnit {
+	units := make([]wrapUnit, 0, len(toks))
+	for i := 0; i < len(toks); {
+		j := i
+		w := uniseg.StringWidth(toks[i].text)
+		for j+1 < len(toks) && toks[j+1].glue {
+			j++
+			w += uniseg.StringWidth(toks[j].text)
+		}
+		if j > i && w > width {
+			for k := i; k <= j; k++ {
+				units = append(units, wrapUnit{
+					toks: toks[k : k+1],
+					w:    uniseg.StringWidth(toks[k].text),
+					glue: toks[k].glue,
+					pre:  toks[k].pre,
+				})
+			}
+			i = j + 1
+			continue
+		}
+		units = append(units, wrapUnit{toks: toks[i : j+1], w: w, glue: toks[i].glue, pre: toks[i].pre})
+		i = j + 1
+	}
+	return units
+}
+
 // wrapTokens lays tokens out into lines of at most width display cells.
-// Breaks happen at token boundaries (the painted space between tokens, or a
-// forced pre break); a token wider than width hard-breaks at cluster
-// boundaries via splitWideToken. Glued tokens prefer to share a line with
-// their predecessor but may be separated when nothing else fits -- that is a
-// mid-word style boundary, which wraps no worse than a hard break. width <= 0
-// disables wrapping entirely (one line, whatever it costs).
+// Breaks happen between placement units (see wrapUnits); a gap cost is only
+// charged when something already precedes the unit on its line, so a
+// line-initial unit costs its own width alone. A token wider than width is
+// cluster-split up front by preSplitWideTokens; width <= 0 disables wrapping
+// entirely (one line, whatever it costs).
 func wrapTokens(toks []cellToken, width int) [][]cellToken {
 	if width <= 0 {
 		return [][]cellToken{toks}
 	}
-	// Hard-break oversized tokens up front; see preSplitWideTokens.
-	toks = preSplitWideTokens(toks, width)
+	units := wrapUnits(preSplitWideTokens(toks, width), width)
 	var lines [][]cellToken
 	var cur []cellToken
 	curW := 0
-	for _, tok := range toks {
-		tw := uniseg.StringWidth(tok.text)
-		gap := 1
-		if tok.glue {
-			gap = 0
+	for _, u := range units {
+		gap := 0
+		if len(cur) > 0 && !u.glue {
+			gap = 1
 		}
-		if len(cur) > 0 && (tok.pre || curW+gap+tw > width) {
+		if len(cur) > 0 && (u.pre || curW+gap+u.w > width) {
 			lines = append(lines, cur)
 			cur = nil
 			curW = 0
+			gap = 0
 		}
-		cur = append(cur, tok)
-		curW += gap + tw
+		cur = append(cur, u.toks...)
+		curW += gap + u.w
 	}
 	if len(cur) > 0 || len(lines) == 0 {
 		lines = append(lines, cur)
@@ -573,7 +642,9 @@ func tokenLinePaintedWidth(toks []cellToken) int {
 // escaped unit. It mirrors renderSegmentGroup's style branches exactly but
 // never appends a link decoration: in the wrapped layout the decoration is an
 // explicit token (cellTokens), so appending one here would paint it twice.
-func renderTokenGroup(s0 Segment, raw string, opts Options) string {
+// plain selects the decoration's styling: link color without the underline
+// the label carries.
+func renderTokenGroup(s0 Segment, plain bool, raw string, opts Options) string {
 	if raw == "" {
 		return ""
 	}
@@ -583,7 +654,11 @@ func renderTokenGroup(s0 Segment, raw string, opts Options) string {
 		if opts.Theme == (Theme{}) {
 			col = DefaultTheme().Link
 		}
-		return tag(col, "", "u") + text + closeTag()
+		flags := "u"
+		if plain {
+			flags = ""
+		}
+		return tag(col, "", flags) + text + closeTag()
 	}
 	if s0.Code {
 		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag()
@@ -603,7 +678,7 @@ func renderTokenLine(toks []cellToken, opts Options) string {
 	var b strings.Builder
 	for i := 0; i < len(toks); {
 		j := i
-		for j+1 < len(toks) && sameSegmentTreatment(toks[j].seg, toks[j+1].seg) {
+		for j+1 < len(toks) && sameSegmentTreatment(toks[j].seg, toks[j+1].seg) && toks[j].plain == toks[j+1].plain {
 			j++
 		}
 		group := toks[i : j+1]
@@ -617,7 +692,7 @@ func renderTokenLine(toks []cellToken, opts Options) string {
 		if i > 0 && !group[0].glue {
 			b.WriteString(" ")
 		}
-		b.WriteString(renderTokenGroup(group[0].seg, tb.String(), opts))
+		b.WriteString(renderTokenGroup(group[0].seg, group[0].plain, tb.String(), opts))
 		i = j + 1
 	}
 	return b.String()

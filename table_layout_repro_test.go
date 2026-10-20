@@ -72,43 +72,94 @@ func TestTableWideContentLaysOutToWidth(t *testing.T) {
 		"| Streaming incremental parse with word wrap policy | Blocked on width budget allocation |\n" +
 		"| Cluster aware width measurement | Landed in the table layout rework |\n"
 	out := Render(src, Options{Width: 60})
+	// (1) No line wider than the budget. Measure the RAW render lines, not
+	// the painted screen: a SimulationScreen is 60 cells wide by
+	// construction, so screen rows can never exceed the width even when
+	// the render itself emits 80-cell lines that tview then folds.
+	for i, line := range strings.Split(out, "\n") {
+		if w := uniseg.StringWidth(stripTags(line)); w > 60 {
+			t.Errorf("render line %d paints %d cells, want <= 60: %q", i, w, stripTags(line))
+		}
+	}
 	rows := paintedScreenRows(t, out, 60, 24)
 
 	if len(rows) < 4 {
 		t.Fatalf("painted %d screen lines, want at least header+separator+2 body; wrapped output:\n%s",
 			len(rows), strings.Join(rows, "\n"))
 	}
-	// (1) No line wider than the budget.
-	for i, r := range rows {
-		if w := rowLen(r); w > 60 {
-			t.Errorf("painted line %d is %d cells wide, want <= 60:\n%q", i, w, r)
-		}
-	}
-	// (2) Words survive intact: a mid-word break inserts a line break inside
-	// the word, so the whole word no longer appears contiguously in out.
+	// (2) Words survive intact: check the PAINTED rows, so a break inside a
+	// word (which also splits it across lines) is visible -- the raw tagged
+	// string still contains every word contiguously even when it folds.
+	painted := strings.Join(rows, "\n")
 	for _, word := range []string{"Feature", "description", "summary", "Implementation", "status", "details",
 		"Streaming", "incremental", "policy", "Cluster", "measurement", "Landed", "rework"} {
-		if !strings.Contains(out, word) {
-			t.Errorf("word %q split mid-word or missing from layout:\n%s", word, out)
+		if !strings.Contains(painted, word) {
+			t.Errorf("word %q split mid-word or missing from layout:\n%s", word, painted)
 		}
 	}
 	// (3) The separator row is all box-drawing dashes with exactly one space
 	// at the column boundary; every other painted row must be blank at that
 	// screen cell, i.e. column 2 starts exactly where the separator says.
-	sep := rows[1]
+	// Locate the separator by content -- a wrapping header may occupy more
+	// than one painted line, so a fixed index would be brittle.
+	sepIdx := -1
+	for i, r := range rows {
+		if strings.Contains(r, "─") && strings.Trim(strings.Map(dropDashSpace, r), " ") == "" {
+			sepIdx = i
+			break
+		}
+	}
+	if sepIdx < 0 {
+		t.Fatalf("no separator row found in painted output:\n%s", painted)
+	}
+	sep := rows[sepIdx]
 	byteIdx := strings.IndexByte(sep, ' ')
 	if byteIdx < 0 {
 		t.Fatalf("separator row has no column boundary: %q", sep)
 	}
 	boundary := uniseg.StringWidth(sep[:byteIdx]) // byte index -> screen cell
 	for i, r := range rows {
-		if i == 1 {
+		if i == sepIdx {
 			continue
 		}
 		if !rowBlankAtCell(r, boundary) {
 			t.Errorf("row %d paints non-blank at column-boundary cell %d — a cell spills into its neighbor:\n%q", i, boundary, r)
 		}
 	}
+}
+
+// dropDashSpace maps box-drawing dashes and spaces to spaces, so trimming the
+// result identifies a separator row.
+func dropDashSpace(r rune) rune {
+	if r == '─' {
+		return ' '
+	}
+	return r
+}
+
+// stripTags returns the visible text of one tagged render line: an escaped
+// "[[" paints one '[' and counts as one cell, and bracketed colour tags paint
+// nothing.
+func stripTags(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '[' {
+			b.WriteByte(s[i])
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == '[' {
+			b.WriteByte('[')
+			i++
+			continue
+		}
+		end := strings.IndexByte(s[i:], ']')
+		if end < 0 {
+			b.WriteByte(s[i])
+			continue
+		}
+		i += end
+	}
+	return b.String()
 }
 
 // rowBlankAtCell reports whether painted row is blank (space, or the row
