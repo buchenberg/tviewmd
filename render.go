@@ -1,5 +1,7 @@
 package tviewmd
 
+import "github.com/rivo/tview"
+
 // Theme holds the color scheme used by renderers. Colors are expressed in any
 // form the target backend understands (tview accepts named colors like "red",
 // hex like "#ff8c42", and "default").
@@ -50,8 +52,13 @@ type Options struct {
 // accumulator see Renderer.
 func Render(src string, opts Options) string {
 	blocks, err := Parse(src)
-	if err != nil || len(blocks) == 0 {
-		return src
+	switch {
+	case err != nil:
+		// Parse documents that it never fails, but a future backend might. Escape
+		// rather than echo src: raw brackets would be read as tview tags.
+		return tview.Escape(src)
+	case len(blocks) == 0:
+		return ""
 	}
 	return RenderTView(blocks, opts)
 }

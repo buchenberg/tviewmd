@@ -1,6 +1,9 @@
 package tviewmd
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // Renderer incrementally renders a markdown stream to tview color-tagged text.
 //
@@ -21,9 +24,16 @@ import "strings"
 // so full re-render per flush is cheap; repeated calls without new input return
 // the cached output.
 //
-// A Renderer is not safe for concurrent use. Drive it from a single goroutine —
-// in a tview app, from a QueueUpdateDraw/QueueUpdate callback.
+// A Renderer is safe for concurrent use: Append and Write are serialized
+// against String, Source, and Reset, so a producer goroutine can stream tokens
+// in while another goroutine flushes the rendered output. In a tview app, call
+// String from a QueueUpdateDraw callback to publish the result. Note that
+// QueueUpdateDraw must not be called from the event-loop goroutine itself — it
+// blocks until the callback has run, which that same goroutine would have to
+// do, so it deadlocks; call QueueUpdate instead when you are already on it.
 type Renderer struct {
+	mu sync.Mutex
+
 	opts Options
 
 	raw   strings.Builder
@@ -38,6 +48,8 @@ func NewRenderer(opts Options) *Renderer {
 
 // Append adds markdown source to the stream and marks the rendered output stale.
 func (r *Renderer) Append(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.raw.WriteString(s)
 	r.dirty = true
 }
@@ -45,6 +57,8 @@ func (r *Renderer) Append(s string) {
 // Write implements io.Writer, appending markdown source to the stream so a
 // Renderer can be used directly as a streaming sink.
 func (r *Renderer) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.dirty = true
 	return r.raw.Write(p)
 }
@@ -52,6 +66,8 @@ func (r *Renderer) Write(p []byte) (int, error) {
 // String returns the current fully-rendered, tview-tagged document. When no new
 // input has arrived since the last call, the cached output is returned unchanged.
 func (r *Renderer) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.dirty {
 		return r.out
 	}
@@ -62,11 +78,15 @@ func (r *Renderer) String() string {
 
 // Source returns the raw markdown accumulated so far.
 func (r *Renderer) Source() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.raw.String()
 }
 
 // Reset discards all accumulated source and rendered output.
 func (r *Renderer) Reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.raw.Reset()
 	r.out = ""
 	r.dirty = true

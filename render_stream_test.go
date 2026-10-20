@@ -2,6 +2,7 @@ package tviewmd
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -149,5 +150,46 @@ func TestRendererStreamingBracketsDoNotInject(t *testing.T) {
 	}
 	if got := screenText(t, r.String()); !strings.Contains(got, "see [green] now") {
 		t.Errorf("streamed bracket span not preserved:\n on-screen: %q", got)
+	}
+}
+
+// TestRendererConcurrentAppendAndString exercises the mutex that guards the raw
+// buffer: one goroutine streams chunks in while another flushes rendered output
+// and reads the source. Run under -race, this fails if any of Append, Write,
+// String, or Source touches r.raw / r.out / r.dirty without the lock.
+func TestRendererConcurrentAppendAndString(t *testing.T) {
+	t.Parallel()
+
+	opts := Options{Width: 40}
+	r := NewRenderer(opts)
+	chunks := []string{
+		"# Title\n\n",
+		"A **bold** paragraph with `code`.\n\n",
+		"| A | B |\n|---|---|\n| 1 | 2 |\n",
+		"- one\n",
+	}
+	const rounds = 40
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			r.Append(chunks[i%len(chunks)])
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			_ = r.String()
+			_ = r.Source()
+		}
+	}()
+	wg.Wait()
+
+	// After the producer finishes, the cache must agree with a full re-render
+	// of the accumulated source: no flush may have observed a torn buffer.
+	if got, want := r.String(), Render(r.Source(), opts); got != want {
+		t.Errorf("concurrent flush diverged from Render\n got: %q\nwant: %q", got, want)
 	}
 }
