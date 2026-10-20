@@ -1,6 +1,7 @@
 package tviewmd
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -382,6 +383,233 @@ func TestCellPlainWidthCountsEmojiPresentation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mkCell builds a single-segment plain-text cell; the planner tests need no
+// styling, only the text the painter would measure.
+func mkCell(text string) TableCell {
+	return TableCell{Segments: []Segment{{Text: text}}}
+}
+
+// TestCellTokensPreservesMultibyteText: token text must be a byte-exact slice
+// of the source. Building it byte-by-byte via string(byte) would re-encode
+// each byte as a rune and turn "caf\u00e9" into "caf\u00c3\u00a9".
+func TestCellTokensPreservesMultibyteText(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{"caf\u00e9", "na\u00efve d\u00e9cor", "\u4f60\u597d \u4e16\u754c", "\u270d\ufe0f ok"} {
+		got := cellTokens(mkCell(text))
+		var joined strings.Builder
+		for i, tok := range got {
+			if i > 0 && !tok.glue {
+				joined.WriteString(" ")
+			}
+			joined.WriteString(tok.text)
+		}
+		if want := strings.Join(strings.Fields(text), " "); joined.String() != want {
+			t.Errorf("cellTokens(%q) rejoined to %q, want %q", text, joined.String(), want)
+		}
+	}
+}
+
+// TestWrapTokensChargesGapOnlyMidLine: the painted space between tokens is
+// only paid when something precedes the token on its line. Charging it to a
+// line-initial token shrinks every line's usable width by one and splits
+// content that fits exactly ("aa bb" in a 5-cell column).
+func TestWrapTokensChargesGapOnlyMidLine(t *testing.T) {
+	t.Parallel()
+
+	lines := wrapTokens([]cellToken{{text: "aa"}, {text: "bb"}}, 5)
+	if len(lines) != 1 || len(lines[0]) != 2 {
+		t.Fatalf("wrapTokens(aa bb, width 5) = %v lines, want one line of two tokens", lines)
+	}
+}
+
+// TestWrapTokensMovesWholeWord: glued tokens are fragments of one word split
+// at style boundaries; the whole word must move to the next line when it fits
+// there, instead of leaving fragments behind ("a bo" / "ld").
+func TestWrapTokensMovesWholeWord(t *testing.T) {
+	t.Parallel()
+
+	toks := []cellToken{{text: "a"}, {text: "bo"}, {text: "ld", glue: true}}
+	lines := wrapTokens(toks, 4)
+	if len(lines) != 2 {
+		t.Fatalf("wrapTokens(a bo ld, width 4) = %d lines, want 2", len(lines))
+	}
+	if len(lines[0]) != 1 || lines[0][0].text != "a" {
+		t.Errorf("first line = %v, want [a]", lines[0])
+	}
+	if len(lines[1]) != 2 || lines[1][0].text != "bo" || lines[1][1].text != "ld" {
+		t.Errorf("second line = %v, want [bo ld] (whole word)", lines[1])
+	}
+}
+
+// TestSolveColumnWidthsCountsDecorationFloor: a link decoration is an
+// unbreakable run, so it belongs in the column floor. With a 10-cell
+// decoration in column 1 the solver must prefer the balanced [10 8] plan over
+// cramming column 1 to [9 9] and cluster-splitting the URL for one cell.
+func TestSolveColumnWidthsCountsDecorationFloor(t *testing.T) {
+	t.Parallel()
+
+	table := TableData{
+		Header: []TableCell{
+			{Segments: []Segment{{Text: "docs", Link: "http://x"}}},
+			mkCell("aaa bbb ccc"),
+		},
+	}
+	got := solveColumnWidths(table, 18)
+	want := []int{10, 8}
+	if !slices.Equal(got, want) {
+		t.Errorf("solveColumnWidths(budget 18) = %v, want %v (decoration is unbreakable)", got, want)
+	}
+}
+
+// TestSolveColumnWidths covers the column-budget planner: max-content widths
+// when they fit, widest-first shrinking clamped at unbreakable-token floors,
+// hard-breaking the floors when even they overflow, and the degenerate budgets
+// (0, below the column count) that must terminate deterministically.
+func TestSolveColumnWidths(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		table  TableData
+		budget int
+		want   []int
+	}{
+		{
+			name:   "fits, max-content unchanged",
+			table:  TableData{Header: []TableCell{mkCell("abc"), mkCell("de")}, Rows: [][]TableCell{{mkCell("f"), mkCell("g")}}},
+			budget: 10,
+			want:   []int{3, 2},
+		},
+		{
+			name:   "budget 0 returns natural",
+			table:  TableData{Header: []TableCell{mkCell("abc"), mkCell("de")}},
+			budget: 0,
+			want:   []int{3, 2},
+		},
+		{
+			name:   "shrink takes from the widest column, not the leftmost",
+			table:  TableData{Header: []TableCell{mkCell("xy zw"), mkCell("abcd ef")}},
+			budget: 8,
+			want:   []int{4, 4},
+		},
+		{
+			name:   "shrink clamps at the widest unbreakable token",
+			table:  TableData{Header: []TableCell{mkCell("ab cd"), mkCell("xyz")}},
+			budget: 5,
+			want:   []int{2, 3},
+		},
+		{
+			name:   "hard-break reduces floors, largest first, leftmost on ties",
+			table:  TableData{Header: []TableCell{mkCell("abcd"), mkCell("ef")}},
+			budget: 3,
+			want:   []int{1, 2},
+		},
+		{
+			name:   "hard newline splits tokens for the floor",
+			table:  TableData{Header: []TableCell{mkCell("aa\nbbb")}},
+			budget: 3,
+			want:   []int{3},
+		},
+		{
+			name:   "ragged rows: missing cells skipped, extra columns planned",
+			table:  TableData{Header: []TableCell{mkCell("a")}, Rows: [][]TableCell{{mkCell("bb"), mkCell("ccc")}, {mkCell("d")}}},
+			budget: 6,
+			want:   []int{2, 3},
+		},
+		{
+			name:   "empty table",
+			table:  TableData{},
+			budget: 10,
+			want:   nil,
+		},
+		{
+			name:   "budget below the non-empty column count bottoms out at 1 each",
+			table:  TableData{Header: []TableCell{mkCell("aaa"), mkCell("b"), mkCell("cc")}},
+			budget: 1,
+			want:   []int{1, 1, 1},
+		},
+		{
+			name:   "fully empty column stays 0",
+			table:  TableData{Header: []TableCell{mkCell("a"), mkCell("")}, Rows: [][]TableCell{{mkCell("bb")}}},
+			budget: 1,
+			want:   []int{1, 0},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := solveColumnWidths(tc.table, tc.budget); !slices.Equal(got, tc.want) {
+				t.Errorf("solveColumnWidths(budget=%d) = %v, want %v", tc.budget, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCellTokensDecorationAfterLinkText pins the token ordering for a
+// link group followed by trailing plain text in the same cell: the
+// decoration token must come AFTER the link text it labels. An earlier
+// tokenization appended the group's decoration while the group's final
+// token was still open, painting "(url) docs" instead of "docs (url)" in
+// every wrapped cell that had text after a link.
+func TestCellTokensDecorationAfterLinkText(t *testing.T) {
+	t.Parallel()
+
+	cell := TableCell{Segments: []Segment{
+		{Text: "docs", Link: "https://example.com/u"},
+		{Text: " tail text here"},
+	}}
+	got := cellTokens(cell)
+	want := []string{"docs", "(https://example.com/u)", "tail", "text", "here"}
+	if len(got) != len(want) {
+		t.Fatalf("cellTokens = %v, want %v", gotTexts(got), want)
+	}
+	for i, w := range want {
+		if got[i].text != w {
+			t.Errorf("token %d = %q, want %q (full: %v)", i, got[i].text, w, gotTexts(got))
+		}
+	}
+	// The link text and its decoration must share a treatment so the
+	// decoration paints in the link colour; the plain flag then keeps it out
+	// of the label's style group so the label's underline does not bleed onto
+	// the URL (and wrapped/unwrapped cells style the same way).
+	if !sameSegmentTreatment(got[0].seg, got[1].seg) {
+		t.Errorf("link text and decoration do not share treatment; the decoration would not paint in the link colour")
+	}
+	if !got[1].plain {
+		t.Errorf("decoration token is not plain; appendDecoration must set plain so the label's underline stays off the URL")
+	}
+}
+
+// TestPreSplitWideTokensKeepsPlainFlag pins a review finding: a decoration
+// token wider than its column is split by preSplitWideTokens, and every chunk
+// must stay plain so a hard-broken URL is styled exactly like one that fits --
+// link colour, no label underline, and out of the label's style group.
+func TestPreSplitWideTokensKeepsPlainFlag(t *testing.T) {
+	t.Parallel()
+
+	long := "(https://example.com/a/very/long/target/path)"
+	toks := []cellToken{{text: long, seg: Segment{Link: long[1 : len(long)-1]}, plain: true}}
+	out := preSplitWideTokens(toks, 10)
+	if len(out) < 2 {
+		t.Fatalf("preSplitWideTokens produced %d chunks, want a split: %v", len(out), gotTexts(out))
+	}
+	for i, tok := range out {
+		if !tok.plain {
+			t.Errorf("chunk %d (%q) lost the plain flag; a hard-broken URL would paint underlined and merge with the label", i, tok.text)
+		}
+	}
+}
+
+// gotTexts renders tokens as their texts for failure messages.
+func gotTexts(toks []cellToken) []string {
+	out := make([]string, len(toks))
+	for i, tok := range toks {
+		out[i] = tok.text
+	}
+	return out
 }
 
 // screenRowWidths draws tagged text into a wide simulation screen with wrapping

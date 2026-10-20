@@ -30,9 +30,11 @@ func DefaultTheme() Theme {
 }
 
 // Options configure rendering. The zero value renders with the default theme
-// and an 80-column width for rules and tables.
+// and an 80-column width for rules; tables use max-content column widths
+// unless Width constrains them.
 type Options struct {
-	// Width is used for horizontal-rule length and table column sizing. 0 = 80.
+	// Width is the horizontal-rule length and the table layout budget. 0 means
+	// 80 for rules and max-content (no constrained layout) for tables.
 	Width int
 
 	// Theme is the color theme. The zero value uses DefaultTheme().
