@@ -37,12 +37,13 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		if blk.Level >= 1 && blk.Level <= 6 {
 			col = opts.Theme.Heading[blk.Level-1]
 		}
-		b.WriteString(tag(col, "", "b"))
-		b.WriteString(renderSegments(blk.Segments, opts))
+		ambient := tag(col, "", "b")
+		b.WriteString(ambient)
+		b.WriteString(renderSegments(blk.Segments, opts, ambient))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	case BlockParagraph:
-		b.WriteString(renderSegments(blk.Segments, opts))
+		b.WriteString(renderSegments(blk.Segments, opts, ""))
 		b.WriteString("\n")
 	case BlockThematicBreak:
 		b.WriteString(tag(opts.Theme.Hr, "", ""))
@@ -53,9 +54,10 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		b.WriteString(renderCode(blk.Code, opts))
 		b.WriteString("\n")
 	case BlockBlockquote:
-		b.WriteString(tag(opts.Theme.QuoteFG, "", "i"))
+		ambient := tag(opts.Theme.QuoteFG, "", "i")
+		b.WriteString(ambient)
 		b.WriteString("▎ ")
-		b.WriteString(renderSegments(blk.Segments, opts))
+		b.WriteString(renderSegments(blk.Segments, opts, ambient))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	case BlockList:
@@ -74,7 +76,7 @@ func renderList(b *strings.Builder, items []ListItem, opts Options, depth int) {
 		}
 		b.WriteString(indent)
 		b.WriteString(marker)
-		b.WriteString(renderSegments(it.Segments, opts))
+		b.WriteString(renderSegments(it.Segments, opts, ""))
 		b.WriteString("\n")
 		if len(it.Children) > 0 {
 			renderList(b, it.Children, opts, depth+1)
@@ -87,22 +89,14 @@ func renderCode(cb CodeBlock, opts Options) string {
 	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(source) + closeTag()
 }
 
-//nolint:gocognit // Column widths, separators and padding are laid out together; splitting scatters the rules.
+// renderTable paints a table: the bold header row, the separator, then the
+// body. Column widths come from the max-content plan or, when Options.Width
+// constrains it, from the wrapped layout below.
 func renderTable(b *strings.Builder, t TableData, opts Options) {
-	cols := tableCols(t)
+	widths := maxContentWidths(t)
+	cols := len(widths)
 	if cols == 0 {
 		return
-	}
-	widths := make([]int, cols)
-	for i, c := range t.Header {
-		if i < cols {
-			widths[i] = max(widths[i], cellPaintedWidth(c))
-		}
-	}
-	for _, row := range t.Rows {
-		for i := 0; i < cols && i < len(row); i++ {
-			widths[i] = max(widths[i], cellPaintedWidth(row[i]))
-		}
 	}
 	// Width-constrained tables: with a width budget, plan column widths that
 	// fit it; when the plan differs from max-content, rows re-flow as
@@ -120,8 +114,9 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 	}
 	// Header row (bold).
 	if len(t.Header) > 0 {
-		b.WriteString(tag("", "", "b"))
-		b.WriteString(renderTableRow(t.Header, widths, opts))
+		ambient := tag("", "", "b")
+		b.WriteString(ambient)
+		b.WriteString(renderTableRow(t.Header, widths, opts, ambient))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	}
@@ -143,22 +138,22 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 				padded[i] = row[i]
 			}
 		}
-		b.WriteString(renderTableRow(padded, widths, opts))
+		b.WriteString(renderTableRow(padded, widths, opts, ""))
 		b.WriteString("\n")
 	}
 }
 
 // renderTableRow emits one row as space-separated, padded cells. The visible
 // content is styled via renderSegments; padding is computed from the painted
-// width (segment text plus any link decoration renderSegmentGroup draws) so
+// width (segment text plus any link decoration renderSegments draws) so
 // color tags do not affect column alignment.
-func renderTableRow(cells []TableCell, widths []int, opts Options) string {
+func renderTableRow(cells []TableCell, widths []int, opts Options, ambient string) string {
 	var b strings.Builder
 	for i, c := range cells {
 		if i > 0 {
 			b.WriteString(" ")
 		}
-		content := renderSegments(c.Segments, opts)
+		content := renderSegments(c.Segments, opts, ambient)
 		paintedW := cellPaintedWidth(c)
 		colW := 0
 		if i < len(widths) {
@@ -214,7 +209,7 @@ func tableCols(t TableData) int {
 // removes exactly one cell from the sum, so the loops cost O(total excess)
 // and cannot spin -- column sums here are small table widths.
 func solveColumnWidths(t TableData, budget int) []int {
-	natural := naturalColumnWidths(t)
+	natural := maxContentWidths(t)
 	sum := 0
 	for _, w := range natural {
 		sum += w
@@ -225,7 +220,7 @@ func solveColumnWidths(t TableData, budget int) []int {
 	}
 	floors := make([]int, len(natural))
 	for i := range floors {
-		floors[i] = colTokenFloor(t, i, natural[i])
+		floors[i] = colTokenFloor(t, i)
 	}
 	// Soft shrink, then hard-break. In both phases stepReduce takes one cell
 	// per pass from the widest column still above its limit -- the floors for
@@ -266,10 +261,10 @@ func stepReduce(widths, lim []int) bool {
 	return true
 }
 
-// naturalColumnWidths returns each column's max painted width over the
-// header and all body rows -- the max-content plan the width-constrained
-// layout shrinks from, and the direct plan when no budget exists.
-func naturalColumnWidths(t TableData) []int {
+// maxContentWidths returns each column's max painted width over the header and
+// all body rows -- the max-content plan the width-constrained layout shrinks
+// from, and the direct plan when no budget exists.
+func maxContentWidths(t TableData) []int {
 	cols := tableCols(t)
 	widths := make([]int, cols)
 	for i, c := range t.Header {
@@ -291,12 +286,16 @@ func naturalColumnWidths(t TableData) []int {
 // decorations count exactly as they paint (a URL never shrinks until the
 // hard-break phase) and token boundaries match the wrapper's own splitting;
 // a strings.Fields-style split would disagree on non-ASCII whitespace and
-// would miss decorations entirely. natural (the column's max-content width)
-// decides emptiness: a column that paints nothing floors at 0, while any
-// column that paints something floors at 1.
-func colTokenFloor(t TableData, col, natural int) int {
+// would miss decorations entirely. Emptiness is decided from the cells' painted
+// width: a column that paints nothing floors at 0, while any column that paints
+// something floors at 1.
+func colTokenFloor(t TableData, col int) int {
 	widest := 0
+	paints := false
 	measure := func(c TableCell) {
+		if cellPaintedWidth(c) > 0 {
+			paints = true
+		}
 		run := 0
 		for _, tok := range cellTokens(c) {
 			tw := uniseg.StringWidth(tok.text)
@@ -317,7 +316,9 @@ func colTokenFloor(t TableData, col, natural int) int {
 			measure(row[col])
 		}
 	}
-	if natural == 0 {
+	// An empty column has no floor; a column that paints anything floors at 1
+	// so a non-empty column is never hidden entirely.
+	if !paints {
 		return 0
 	}
 	return max(widest, 1)
@@ -331,8 +332,9 @@ func colTokenFloor(t TableData, col, natural int) int {
 func renderTableWrapped(b *strings.Builder, t TableData, widths []int, opts Options) {
 	cols := len(widths)
 	if len(t.Header) > 0 {
-		for _, line := range renderWrappedRow(t.Header, widths, opts) {
-			b.WriteString(tag("", "", "b"))
+		ambient := tag("", "", "b")
+		for _, line := range renderWrappedRow(t.Header, widths, opts, ambient) {
+			b.WriteString(ambient)
 			b.WriteString(line)
 			b.WriteString(closeTag())
 			b.WriteString("\n")
@@ -352,7 +354,7 @@ func renderTableWrapped(b *strings.Builder, t TableData, widths []int, opts Opti
 		for i := 0; i < cols && i < len(row); i++ {
 			padded[i] = row[i]
 		}
-		for _, line := range renderWrappedRow(padded, widths, opts) {
+		for _, line := range renderWrappedRow(padded, widths, opts, "") {
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
@@ -392,17 +394,17 @@ func isASCIISpaceByte(b byte) bool {
 // containing "\n" force a break before the next token); whitespace itself is
 // dropped and re-synthesized as single spaces when lines are joined, so a
 // re-flowed cell may paint fewer separating spaces than its source had. Link
-// decorations are emitted as explicit "(url)" tokens exactly where
-// renderSegmentGroup would paint them, using its condition verbatim.
+// decorations are emitted as explicit "(url)" tokens after each link run,
+// exactly where renderSegments would paint them, using its condition verbatim.
 func cellTokens(c TableCell) []cellToken {
 	var toks []cellToken
 	var open *openToken
 	carryGlue := false
 	pendingBreak := false
-	// groupText accumulates the raw (untrimmed) text of the current
-	// same-treatment segment group, mirroring the group walk in
-	// cellPaintedWidth/renderSegments, to evaluate the decoration condition.
-	var groupText strings.Builder
+	// linkText accumulates the raw (untrimmed) text of the current link run,
+	// mirroring the run walk in renderSegments, to evaluate the decoration
+	// condition once per run rather than once per treatment group.
+	var linkText strings.Builder
 	for si, s := range c.Segments {
 		if si > 0 && !sameSegmentTreatment(c.Segments[si-1], s) {
 			// The previous treatment group ends mid-cell. Its still-open token
@@ -411,26 +413,32 @@ func cellTokens(c TableCell) []cellToken {
 			// link text it labels, never before it.
 			toks = flushOpen(toks, open)
 			open = nil
-			appendDecoration(&toks, groupText.String(), c.Segments[si-1])
-			groupText.Reset()
+			prev := c.Segments[si-1]
+			if prev.Link != s.Link {
+				// The link run ends here; a label may span several treatment
+				// groups ("[**do**cs](u)"), so only the run's last group gets
+				// the decoration.
+				appendDecoration(&toks, linkText.String(), prev)
+				linkText.Reset()
+			}
 		}
-		groupText.WriteString(s.Text)
+		linkText.WriteString(s.Text)
 		toks, open, pendingBreak, carryGlue = scanSegmentTokens(toks, open, s, pendingBreak, carryGlue)
 	}
 	// Flush the final group; the carry's life ends here, so no reseat.
 	toks = flushOpen(toks, open)
 	if n := len(c.Segments); n > 0 {
-		appendDecoration(&toks, groupText.String(), c.Segments[n-1])
+		appendDecoration(&toks, linkText.String(), c.Segments[n-1])
 	}
 	return toks
 }
 
-// appendDecoration appends a group's link decoration token when
-// renderSegmentGroup's emission condition holds (group text non-empty, link
-// set, and the text not the bare link target). Mirroring that condition
-// verbatim keeps measurement and paint coupled. The token is plain: the
-// fast path paints the decoration in the link color without the label's
-// underline, and the wrapped layout must match.
+// appendDecoration appends a link run's decoration token when renderSegments'
+// emission condition holds (run text non-empty, link set, and the text not the
+// bare link target). Mirroring that condition verbatim keeps measurement and
+// paint coupled. The token is plain: the fast path paints the decoration in
+// the link color without the label's underline, and the wrapped layout must
+// match.
 func appendDecoration(toks *[]cellToken, raw string, seg Segment) {
 	if raw != "" && seg.Link != "" && raw != seg.Link {
 		plain := cellToken{text: "(" + seg.Link + ")", seg: seg, plain: true}
@@ -640,42 +648,21 @@ func tokenLinePaintedWidth(toks []cellToken) int {
 }
 
 // renderTokenGroup renders one same-treatment run of tokens as a single
-// escaped unit. It mirrors renderSegmentGroup's style branches exactly but
-// never appends a link decoration: in the wrapped layout the decoration is an
-// explicit token (cellTokens), so appending one here would paint it twice.
-// plain selects the decoration's styling: link color without the underline
-// the label carries.
-func renderTokenGroup(s0 Segment, plain bool, raw string, opts Options) string {
-	if raw == "" {
-		return ""
-	}
-	text := tview.Escape(raw)
-	if s0.Link != "" {
-		col := opts.Theme.Link
-		if opts.Theme == (Theme{}) {
-			col = DefaultTheme().Link
-		}
-		flags := "u"
-		if plain {
-			flags = ""
-		}
-		return tag(col, "", flags) + text + closeTag()
-	}
-	if s0.Code {
-		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag()
-	}
-	if s0.Style == (Style{}) {
-		return text
-	}
-	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag()
+// escaped unit. plain selects the decoration's styling: link color without the
+// underline the label carries. It shares its style branches with
+// renderSegmentGroup through renderStyledRun so the wrapped and unwrapped
+// painters cannot drift.
+func renderTokenGroup(s0 Segment, plain bool, raw string, opts Options, ambient string) string {
+	return renderStyledRun(s0, plain, raw, opts, ambient)
 }
 
 // renderTokenLine paints one physical line of tokens: consecutive tokens with
 // the same treatment merge and escape as a single unit (the same merged-escape
 // rule as renderSegments -- a tag-shaped bracket pair must be neutralized per
 // line regardless of how goldmark split it), with one space between tokens
-// except where glue says the source had none.
-func renderTokenLine(toks []cellToken, opts Options) string {
+// except where glue says the source had none. The spacing rule must stay in
+// lockstep with tokenLinePaintedWidth, which charges exactly the same cells.
+func renderTokenLine(toks []cellToken, opts Options, ambient string) string {
 	var b strings.Builder
 	for i := 0; i < len(toks); {
 		j := i
@@ -693,7 +680,7 @@ func renderTokenLine(toks []cellToken, opts Options) string {
 		if i > 0 && !group[0].glue {
 			b.WriteString(" ")
 		}
-		b.WriteString(renderTokenGroup(group[0].seg, group[0].plain, tb.String(), opts))
+		b.WriteString(renderTokenGroup(group[0].seg, group[0].plain, tb.String(), opts, ambient))
 		i = j + 1
 	}
 	return b.String()
@@ -704,7 +691,7 @@ func renderTokenLine(toks []cellToken, opts Options) string {
 // line pads every cell to that cell's column width so the columns line up on
 // every painted line. Alignment honors the cell's own Align, like the
 // unwrapped renderTableRow.
-func renderWrappedRow(cells []TableCell, widths []int, opts Options) []string {
+func renderWrappedRow(cells []TableCell, widths []int, opts Options, ambient string) []string {
 	cellLines := make([][][]cellToken, len(cells))
 	rowH := 1
 	for i, c := range cells {
@@ -725,7 +712,7 @@ func renderWrappedRow(cells []TableCell, widths []int, opts Options) []string {
 			content := ""
 			pw := 0
 			if p < len(cellLines[i]) {
-				content = renderTokenLine(cellLines[i][p], opts)
+				content = renderTokenLine(cellLines[i][p], opts, ambient)
 				pw = tokenLinePaintedWidth(cellLines[i][p])
 			}
 			colW := 0
@@ -751,47 +738,39 @@ func renderWrappedRow(cells []TableCell, widths []int, opts Options) []string {
 // see (1 + 0 = 1). Under-counting a column makes every row that contains such a
 // cell one cell wider than its separator, so borders come out ragged.
 //
+// The unit of measurement is the grapheme cluster, never a single cell: a
+// cluster is the smallest thing a terminal paints, so a cluster that occupies
+// two columns is counted as two and one that occupies one is counted as one.
 // The segments are joined before measuring so a cluster split across segment
 // boundaries (for example a combining mark that starts a new segment) is still
 // measured once.
 func cellPlainWidth(c TableCell) int {
-	var b strings.Builder
-	for _, s := range c.Segments {
-		b.WriteString(s.Text)
-	}
-	return uniseg.StringWidth(b.String())
+	return uniseg.StringWidth(segmentsText(c.Segments))
 }
 
 // cellPaintedWidth returns the display width of everything a cell paints, not
-// just its segment text: renderSegmentGroup appends a visible " (url)"
-// decoration after any link group whose label differs from its target, so a
-// column planned from cellPlainWidth alone comes out one decoration narrower
-// than the rows actually painted in it, and header, separator and body rows
-// stop lining up. This is a paint/measure coupling: layout must measure
-// exactly the glyphs the renderer draws, so this function walks the same
-// sameSegmentTreatment groups renderSegments walks and applies
-// renderSegmentGroup's decoration condition verbatim (link set, group text
-// non-empty, group text != target). The decoration is measured in its
-// unescaped form -- tview.Escape doubles '[' in the string while the screen
-// paints a single '[' -- and uniseg keeps the count cluster-aware, matching
-// the oracle tview/tcell paint with.
+// just its segment text: renderSegments appends a visible " (url)" decoration
+// after any link run whose label differs from its target, so a column planned
+// from cellPlainWidth alone comes out one decoration narrower than the rows
+// actually painted in it, and header, separator and body rows stop lining up.
+// This is a paint/measure coupling: layout must measure exactly the glyphs the
+// renderer draws, so this function walks the same link runs renderSegments
+// walks and applies its decoration condition verbatim (link set, run text
+// non-empty, run text != target). The decoration is measured in its unescaped
+// form -- tview.Escape doubles '[' in the string while the screen paints a
+// single '[' -- and uniseg keeps the count cluster-aware, matching the oracle
+// tview/tcell paint with.
 func cellPaintedWidth(c TableCell) int {
 	w := cellPlainWidth(c)
 	for i := 0; i < len(c.Segments); {
-		j := i
-		for j+1 < len(c.Segments) && sameSegmentTreatment(c.Segments[j], c.Segments[j+1]) {
-			j++
+		link := c.Segments[i].Link
+		end := linkRunEnd(c.Segments, i)
+		if link != "" {
+			if raw := segmentsText(c.Segments[i : end+1]); raw != "" && raw != link {
+				w += uniseg.StringWidth(" (" + link + ")")
+			}
 		}
-		group := c.Segments[i : j+1]
-		var b strings.Builder
-		for _, s := range group {
-			b.WriteString(s.Text)
-		}
-		raw := b.String()
-		if raw != "" && group[0].Link != "" && raw != group[0].Link {
-			w += uniseg.StringWidth(" (" + group[0].Link + ")")
-		}
-		i = j + 1
+		i = end + 1
 	}
 	return w
 }
@@ -802,17 +781,75 @@ func cellPaintedWidth(c TableCell) int {
 // splits a failed link like "[red]boom" into "[", "red", "]boom", and tview
 // consumes a "[...]" tag shape across segment boundaries, so the full run must
 // be escaped together or the bracket pair would inject a style directive.
-func renderSegments(segs []Segment, opts Options) string {
+//
+// A link's visible " (url)" decoration is emitted here, once per link run,
+// after the run's last group: a label with inline styling is several treatment
+// groups but still one link. The ambient block style is resumed after the
+// decoration, whose own closeTag would otherwise reset it.
+func renderSegments(segs []Segment, opts Options, ambient string) string {
 	var b strings.Builder
+	runStart := 0
 	for i := 0; i < len(segs); {
 		j := i
 		for j+1 < len(segs) && sameSegmentTreatment(segs[j], segs[j+1]) {
 			j++
 		}
-		b.WriteString(renderSegmentGroup(segs[i:j+1], opts))
+		b.WriteString(renderSegmentGroup(segs[i:j+1], opts, ambient))
+		// A link's decoration belongs after the label's last visible text, not
+		// after each treatment group: "[**do**cs](u)" is one link split into
+		// "do" and "cs", and must paint "docs (u)", once.
+		if link := segs[i].Link; link != "" && (j+1 == len(segs) || segs[j+1].Link != link) {
+			if raw := segmentsText(segs[runStart : j+1]); raw != "" && raw != link {
+				b.WriteString(linkDecoration(link, opts))
+				b.WriteString(ambient)
+			}
+		}
+		if next := j + 1; next < len(segs) && segs[next].Link != segs[j].Link {
+			runStart = next
+		}
 		i = j + 1
 	}
 	return b.String()
+}
+
+// segmentsText concatenates the visible text of segs.
+func segmentsText(segs []Segment) string {
+	var b strings.Builder
+	for _, s := range segs {
+		b.WriteString(s.Text)
+	}
+	return b.String()
+}
+
+// linkColor returns the theme's link color, falling back to the default theme
+// when opts carries no theme.
+func linkColor(opts Options) string {
+	if opts.Theme == (Theme{}) {
+		return DefaultTheme().Link
+	}
+	return opts.Theme.Link
+}
+
+// linkDecoration paints the " (url)" suffix shown after a link whose label
+// differs from its target: link color, no label underline, and no trailing
+// style state (the caller resumes any ambient style).
+func linkDecoration(link string, opts Options) string {
+	return " " + tag(linkColor(opts), "", "") + "(" + tview.Escape(link) + ")" + closeTag()
+}
+
+// linkRunEnd returns the index of the last segment in the maximal run of
+// consecutive segments sharing the same non-empty link, or i when segs[i] has
+// no link. A link label may span several treatment groups ("[**do**cs](u)"),
+// and a link's decoration is emitted after the run, not after each group.
+func linkRunEnd(segs []Segment, i int) int {
+	if segs[i].Link == "" {
+		return i
+	}
+	j := i
+	for j+1 < len(segs) && segs[j+1].Link == segs[i].Link {
+		j++
+	}
+	return j
 }
 
 // sameSegmentTreatment reports whether two segments render identically, so they
@@ -824,35 +861,41 @@ func sameSegmentTreatment(a, b Segment) bool {
 // renderSegmentGroup renders a run of same-styled segments. The visible text is
 // concatenated and passed through tview.Escape once, so tag-shaped bracket
 // spans are neutralized regardless of how goldmark split them. Only the tags
-// this function itself emits are left unescaped.
-func renderSegmentGroup(group []Segment, opts Options) string {
-	var tb strings.Builder
-	for _, s := range group {
-		tb.WriteString(s.Text)
+// this function itself emits are left unescaped. Link decorations are emitted
+// by the caller (renderSegments) once per link run.
+func renderSegmentGroup(group []Segment, opts Options, ambient string) string {
+	if len(group) == 0 {
+		return ""
 	}
-	raw := tb.String()
+	return renderStyledRun(group[0], false, segmentsText(group), opts, ambient)
+}
+
+// renderStyledRun renders one same-treatment run: escaped text wrapped in the
+// run's treatment tag (link, code, or a plain Style), followed by the ambient
+// block style so an outer heading/quote style survives the run's closeTag.
+// Plain runs emit no tag at all, which leaves them at the ambient style.
+// Decorations are deliberately absent: the fast path (renderSegments) and the
+// wrapped path (cellTokens) each own their link decoration token, so this
+// function stays purely about the run's own styling.
+func renderStyledRun(s0 Segment, plain bool, raw string, opts Options, ambient string) string {
 	if raw == "" {
 		return ""
 	}
 	text := tview.Escape(raw)
-	s0 := group[0]
-	if s0.Link != "" {
-		col := opts.Theme.Link
-		if opts.Theme == (Theme{}) {
-			col = DefaultTheme().Link
+	switch {
+	case s0.Link != "":
+		flags := "u"
+		if plain {
+			flags = ""
 		}
-		if raw == s0.Link {
-			return tag(col, "", "u") + text + closeTag()
-		}
-		return tag(col, "", "u") + text + closeTag() + " " + tag(col, "", "") + "(" + tview.Escape(s0.Link) + ")" + closeTag()
-	}
-	if s0.Code {
-		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag()
-	}
-	if s0.Style == (Style{}) {
+		return tag(linkColor(opts), "", flags) + text + closeTag() + ambient
+	case s0.Code:
+		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag() + ambient
+	case s0.Style == (Style{}):
 		return text
+	default:
+		return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag() + ambient
 	}
-	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag()
 }
 
 // tag formats a tview color tag [fg:bg:flags]. Empty fields inherit the

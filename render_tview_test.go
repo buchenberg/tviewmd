@@ -83,6 +83,18 @@ func TestRenderListMarkers(t *testing.T) {
 	}
 }
 
+func TestRenderNestedListIndent(t *testing.T) {
+	t.Parallel()
+
+	out := Render("- a\n  - b\n", Options{})
+	if !strings.Contains(out, "• a") {
+		t.Errorf("outer bullet missing in %q", out)
+	}
+	if !strings.Contains(out, "  • b") {
+		t.Errorf("nested bullet not indented in %q", out)
+	}
+}
+
 func TestRenderBlockquote(t *testing.T) {
 	out := Render("> quoted", Options{})
 	if !strings.Contains(out, "▎") {
@@ -152,15 +164,22 @@ func TestRenderTViewTrimsTrailingNewline(t *testing.T) {
 // AttrMask (notably the separate underline-style state).
 func cellStyleFor(t *testing.T, tagged string, r rune) (tcell.Style, bool) {
 	t.Helper()
+	return cellStyleForSize(t, tagged, r, 40, 2)
+}
+
+// cellStyleForSize is cellStyleFor with an explicit screen size, for layouts
+// (wrapped tables) that need more rows than the default two.
+func cellStyleForSize(t *testing.T, tagged string, r rune, w, h int) (tcell.Style, bool) {
+	t.Helper()
 	tv := tview.NewTextView().SetDynamicColors(true).SetWrap(true)
 	tv.SetText(tagged)
-	tv.SetRect(0, 0, 40, 2)
+	tv.SetRect(0, 0, w, h)
 	screen := tcell.NewSimulationScreen("")
 	if err := screen.Init(); err != nil {
 		t.Fatalf("sim screen init: %v", err)
 	}
 	t.Cleanup(screen.Fini)
-	screen.SetSize(40, 2)
+	screen.SetSize(w, h)
 	tv.Draw(screen)
 	screen.Show() // flush back buffer to front so GetContents reflects the draw
 	cells, _, _ := screen.GetContents()
@@ -373,6 +392,14 @@ func TestCellPlainWidthCountsEmojiPresentation(t *testing.T) {
 			name: "cluster split across segments",
 			cell: TableCell{Segments: []Segment{{Text: "\u270d"}, {Text: "\ufe0f"}}},
 			want: 2,
+		},
+		{
+			// VS15 asks for text presentation, so the same base rune stays a
+			// one-cell cluster; the oracle must not promote every variation
+			// selector to two cells.
+			name: "text presentation sequence",
+			cell: TableCell{Segments: []Segment{{Text: "\u270d\ufe0e"}}},
+			want: 1,
 		},
 	}
 	for _, tc := range cases {
@@ -646,6 +673,93 @@ func screenRowWidths(t *testing.T, tagged string, w, h int) []int {
 	return widths
 }
 
+// TestRenderLinkDecorationOncePerRun: a link label that goldmark splits into
+// several style runs ("[**bold** text](url)") is still one link. Its visible
+// target must be printed exactly once, after the whole label -- not once per
+// run, and not in the middle of a word.
+func TestRenderLinkDecorationOncePerRun(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, src, visible string }{
+		{"styled label", "[**bold** text](url)", "bold text (url)"},
+		{"styled label mid-word", "[**do**cs](u)", "docs (u)"},
+		{"thin label", "[**u**](u)", "u"},
+		{"styled autolink label", "[**https://x**](https://x)", "https://x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := Render(tc.src, Options{})
+			if got := stripTags(out); got != tc.visible {
+				t.Errorf("Render(%q) paints %q, want %q\nraw: %s", tc.src, got, tc.visible, out)
+			}
+		})
+	}
+}
+
+// TestCellTokensDecorationAfterStyledLabelRun: the wrapped layout must place the
+// decoration after the run's last word, not between the styled fragments, and
+// must still glue the fragments together.
+func TestCellTokensDecorationAfterStyledLabelRun(t *testing.T) {
+	t.Parallel()
+
+	cell := TableCell{Segments: []Segment{
+		{Text: "do", Link: "u", Style: Style{Bold: true}},
+		{Text: "cs", Link: "u"},
+	}}
+	toks := cellTokens(cell)
+	want := []string{"do", "cs", "(u)"}
+	if len(toks) != len(want) {
+		t.Fatalf("cellTokens = %v, want %v", gotTexts(toks), want)
+	}
+	for i, w := range want {
+		if toks[i].text != w {
+			t.Errorf("token %d = %q, want %q (full: %v)", i, toks[i].text, w, gotTexts(toks))
+		}
+	}
+	if !toks[1].glue {
+		t.Errorf("label fragments split: %v", gotTexts(toks))
+	}
+	if toks[2].glue {
+		t.Errorf("decoration must paint its own separating space: %v", gotTexts(toks))
+	}
+}
+
+// TestCellPaintedWidthCountsOneDecorationPerRun guards the paint/measure
+// coupling for styled labels: measuring per treatment group would budget two
+// decorations for one link and push later columns out of alignment.
+func TestCellPaintedWidthCountsOneDecorationPerRun(t *testing.T) {
+	t.Parallel()
+
+	cell := TableCell{Segments: []Segment{
+		{Text: "bold", Link: "url", Style: Style{Bold: true}},
+		{Text: " text", Link: "url"},
+	}}
+	// "bold text" is 9 cells; " (url)" is 6.
+	if got, want := cellPaintedWidth(cell), 15; got != want {
+		t.Errorf("cellPaintedWidth = %d, want %d", got, want)
+	}
+}
+
+// TestRenderWrappedStyledLinkLabel: the same rule through the wrapped painter,
+// at a width that forces the row to reflow.
+func TestRenderWrappedStyledLinkLabel(t *testing.T) {
+	t.Parallel()
+
+	src := "| [**do**cs](u) xx |\n|---|---|\n| a | b |\n"
+	out := Render(src, Options{Width: 10})
+	visible := stripTags(out)
+	if strings.Count(visible, "(u)") != 1 {
+		t.Errorf("decoration painted %d times, want once:\n%s", strings.Count(visible, "(u)"), visible)
+	}
+	if !strings.Contains(visible, "docs") {
+		t.Errorf("label fragments not glued back together:\n%s", visible)
+	}
+	if strings.Contains(visible, "do (u)") {
+		t.Errorf("decoration landed inside the word:\n%s", visible)
+	}
+}
+
 // TestRenderTableAlignsWithEmoji guards the table layout against emoji that are
 // two columns wide. Padding is planned from cellPlainWidth, but tview paints
 // grapheme clusters, so an under-measured column makes every row containing it
@@ -685,4 +799,97 @@ func TestRenderTableAlignsWithEmoji(t *testing.T) {
 			}
 		}
 	}
+}
+
+// requireAttr fails unless style carries attr. It keeps the ambient-style tests
+// honest: comparing against a baseline alone would pass if both sides were
+// equally plain.
+func requireAttr(t *testing.T, what string, style tcell.Style, attr tcell.AttrMask) {
+	t.Helper()
+	if _, _, got := style.Decompose(); got&attr == 0 {
+		t.Errorf("%s lost attribute %v (attrs = %v)", what, attr, got)
+	}
+}
+
+// TestRenderBlockquoteKeepsStyleAfterLink: a blockquote opens an ambient
+// (quote color + italic) style, then inline renderers reset every channel with
+// closeTag(). The italic must be resumed for text after the link, otherwise
+// "tail" renders as ordinary body text inside the quote.
+func TestRenderBlockquoteKeepsStyleAfterLink(t *testing.T) {
+	t.Parallel()
+
+	baseline, ok := cellStyleFor(t, Render("> QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	requireAttr(t, "blockquote baseline", baseline, tcell.AttrItalic)
+
+	got, ok := cellStyleFor(t, Render("> plain *em* [link](u) QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing trailing sentinel after link")
+	}
+	if got != baseline {
+		t.Errorf("quote style not resumed after inline link\n got=%#v\nwant=%#v", got, baseline)
+	}
+}
+
+// TestRenderHeadingKeepsBoldAfterInlineCode: the heading's bold must survive a
+// code span's closeTag and apply to the text that follows it.
+func TestRenderHeadingKeepsBoldAfterInlineCode(t *testing.T) {
+	t.Parallel()
+
+	baseline, ok := cellStyleFor(t, Render("# QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	requireAttr(t, "heading baseline", baseline, tcell.AttrBold)
+
+	got, ok := cellStyleFor(t, Render("# Head `code` QQQ", Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing trailing sentinel after code span")
+	}
+	if got != baseline {
+		t.Errorf("heading style not resumed after inline code\n got=%#v\nwant=%#v", got, baseline)
+	}
+}
+
+// TestRenderHeaderKeepsBoldAfterLink: a link in the first header cell resets
+// the row's bold, so header text in later cells (and later lines, for the
+// wrapped path) must get it back.
+func TestRenderHeaderKeepsBoldAfterLink(t *testing.T) {
+	t.Parallel()
+
+	const baselineSrc = "| plain | QQQ |\n|---|---|\n| a | b |\n"
+	const linkSrc = "| [link](u) | QQQ |\n|---|---|\n| a | b |\n"
+	const wrappedSrc = "| [l](http://x.yz) QQQ | n |\n|---|---|\n| a | b |\n"
+
+	baseline, ok := cellStyleFor(t, Render(baselineSrc, Options{}), 'Q')
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	requireAttr(t, "table header baseline", baseline, tcell.AttrBold)
+
+	t.Run("unwrapped", func(t *testing.T) {
+		t.Parallel()
+		got, ok := cellStyleFor(t, Render(linkSrc, Options{}), 'Q')
+		if !ok {
+			t.Fatal("missing sentinel after link")
+		}
+		if got != baseline {
+			t.Errorf("header bold not resumed after link\n got=%#v\nwant=%#v", got, baseline)
+		}
+	})
+
+	t.Run("wrapped", func(t *testing.T) {
+		t.Parallel()
+		out := Render(wrappedSrc, Options{Width: 16})
+		got, ok := cellStyleForSize(t, out, 'Q', 60, 10)
+		if !ok {
+			t.Fatalf("missing sentinel in wrapped header:\n%s", out)
+		}
+		if got != baseline {
+			t.Errorf("wrapped header bold not resumed after decoration\n got=%#v\nwant=%#v\noutput:\n%s",
+				got, baseline, out)
+		}
+	})
 }

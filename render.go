@@ -1,5 +1,7 @@
 package tviewmd
 
+import "github.com/rivo/tview"
+
 // Theme holds the color scheme used by renderers. Colors are expressed in any
 // form the target backend understands (tview accepts named colors like "red",
 // hex like "#ff8c42", and "default").
@@ -35,6 +37,12 @@ func DefaultTheme() Theme {
 type Options struct {
 	// Width is the horizontal-rule length and the table layout budget. 0 means
 	// 80 for rules and max-content (no constrained layout) for tables.
+	//
+	// Tables are planned when text is rendered, not when it is painted: their
+	// column widths are baked into the returned tag string. Callers that want
+	// tables to track the terminal width must re-render with an updated Width
+	// when the available width changes; resizing the TextView alone only
+	// re-wraps the already-planned table as prose.
 	Width int
 
 	// Theme is the color theme. The zero value uses DefaultTheme().
@@ -50,8 +58,13 @@ type Options struct {
 // accumulator see Renderer.
 func Render(src string, opts Options) string {
 	blocks, err := Parse(src)
-	if err != nil || len(blocks) == 0 {
-		return src
+	switch {
+	case err != nil:
+		// Parse documents that it never fails, but a future backend might. Escape
+		// rather than echo src: raw brackets would be read as tview tags.
+		return tview.Escape(src)
+	case len(blocks) == 0:
+		return ""
 	}
 	return RenderTView(blocks, opts)
 }
