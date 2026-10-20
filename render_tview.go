@@ -614,10 +614,11 @@ func preSplitWideTokens(toks []cellToken, width int) []cellToken {
 		}
 		for k, chunk := range splitWideToken(tok.text, width) {
 			out = append(out, cellToken{
-				text: chunk,
-				seg:  tok.seg,
-				pre:  tok.pre && k == 0,
-				glue: tok.glue && k == 0,
+				text:  chunk,
+				seg:   tok.seg,
+				pre:   tok.pre && k == 0,
+				glue:  tok.glue && k == 0,
+				plain: tok.plain,
 			})
 		}
 	}

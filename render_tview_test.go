@@ -571,10 +571,32 @@ func TestCellTokensDecorationAfterLinkText(t *testing.T) {
 			t.Errorf("token %d = %q, want %q (full: %v)", i, got[i].text, w, gotTexts(got))
 		}
 	}
-	// The mid-word glue path is not involved here, but the link text and its
-	// decoration must share a treatment so they merge into one styled unit.
+	// The link text and its decoration must share a treatment so the
+	// decoration paints in the link colour; the plain flag then keeps it out
+	// of the label's style group so the label's underline does not bleed onto
+	// the URL (and wrapped/unwrapped cells style the same way).
 	if !sameSegmentTreatment(got[0].seg, got[1].seg) {
-		t.Errorf("link text and decoration do not share treatment; they would paint as separate styled runs")
+		t.Errorf("link text and decoration do not share treatment; the decoration would not paint in the link colour")
+	}
+}
+
+// TestPreSplitWideTokensKeepsPlainFlag pins a review finding: a decoration
+// token wider than its column is split by preSplitWideTokens, and every chunk
+// must stay plain so a hard-broken URL is styled exactly like one that fits --
+// link colour, no label underline, and out of the label's style group.
+func TestPreSplitWideTokensKeepsPlainFlag(t *testing.T) {
+	t.Parallel()
+
+	long := "(https://example.com/a/very/long/target/path)"
+	toks := []cellToken{{text: long, seg: Segment{Link: long[1 : len(long)-1]}, plain: true}}
+	out := preSplitWideTokens(toks, 10)
+	if len(out) < 2 {
+		t.Fatalf("preSplitWideTokens produced %d chunks, want a split: %v", len(out), gotTexts(out))
+	}
+	for i, tok := range out {
+		if !tok.plain {
+			t.Errorf("chunk %d (%q) lost the plain flag; a hard-broken URL would paint underlined and merge with the label", i, tok.text)
+		}
 	}
 }
 

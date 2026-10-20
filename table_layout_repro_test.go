@@ -184,11 +184,6 @@ func rowBlankAtCell(row string, cell int) bool {
 	return true // row ended at or before the boundary cell
 }
 
-// rowLen counts display cells, cluster-aware, of one painted screen line.
-func rowLen(row string) int {
-	return uniseg.StringWidth(row)
-}
-
 // TestTableLinkDecorationKeepsRowAligned: cells render a visible " (url)"
 // decoration when a link's label differs from its target, but cellPlainWidth
 // measures only the segment text, so the column is planned one size and
