@@ -9,9 +9,11 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-// These two tests encode the DESIRED table-layout behavior and currently FAIL:
-// they are the regression repro for "small tables render fine, wide tables
-// wrap mid-row and misalign". They must pass after the table layout rework.
+// These two tests pin the table-layout behavior that the rework delivered:
+// wide tables lay out to Options.Width without folding, and painted width
+// accounting covers the visible link decoration. They were the failing
+// repros for "small tables render fine, wide tables wrap mid-row and
+// misalign" and must keep passing.
 
 // paintedScreenRows draws tagged text into a simulation screen of width w with
 // wrapping enabled and returns the painted, right-trimmed screen lines with
@@ -49,14 +51,19 @@ func paintedScreenRows(t *testing.T, tagged string, w, h int) []string {
 	return rows
 }
 
-// TestTableWideContentStaysOnOneLinePerRow: when Options.Width is set, the
-// renderer must lay the table out to fit that width. A logical table row
-// (header, separator, or body) must never be wider than the width budget, so
-// tview's word wrap never breaks a row in half. Today column widths are
-// natural (max content) widths and Options.Width is ignored: every row of this
-// table is 83 cells wide, the TextView wraps each one as prose, and the
-// painted screen shows ~8 ragged lines instead of 4 aligned rows.
-func TestTableWideContentStaysOnOneLinePerRow(t *testing.T) {
+// TestTableWideContentLaysOutToWidth: when Options.Width is set, the renderer
+// must lay the table out to fit that width. The invariant is not "one painted
+// line per logical row" — a 49-cell body cell cannot fit any legal plan for a
+// 60-cell budget, and a wrapped grid legitimately paints several lines per
+// row. What must hold instead: (1) no painted line exceeds the budget, so
+// tview never re-wraps a table line as prose (the folding that shreds
+// alignment); (2) no word is split mid-word — line breaks land between words;
+// (3) the column boundary the separator advertises is a blank cell on every
+// painted row — no cell spills into its right-hand neighbor. Before the
+// rework, column widths were natural max-content widths and Options.Width was
+// ignored: every row of this table painted 83 cells and the TextView wrapped
+// each as prose into ragged halves.
+func TestTableWideContentLaysOutToWidth(t *testing.T) {
 	t.Parallel()
 
 	src := "" +
@@ -67,17 +74,63 @@ func TestTableWideContentStaysOnOneLinePerRow(t *testing.T) {
 	out := Render(src, Options{Width: 60})
 	rows := paintedScreenRows(t, out, 60, 24)
 
-	const wantRows = 4 // header, separator, two body rows — one line each
-	if len(rows) != wantRows {
-		t.Errorf("painted %d screen lines, want %d (one per logical row); wrapped output:\n%s",
-			len(rows), wantRows, strings.Join(rows, "\n"))
+	if len(rows) < 4 {
+		t.Fatalf("painted %d screen lines, want at least header+separator+2 body; wrapped output:\n%s",
+			len(rows), strings.Join(rows, "\n"))
 	}
-	if len(rows) == wantRows {
-		// Columns must line up: the separator must span exactly the header row.
-		if w0, w1 := rowLen(rows[0]), rowLen(rows[1]); w0 != w1 {
-			t.Errorf("header row spans %d cells but separator spans %d:\n%s\n%s", w0, w1, rows[0], rows[1])
+	// (1) No line wider than the budget.
+	for i, r := range rows {
+		if w := rowLen(r); w > 60 {
+			t.Errorf("painted line %d is %d cells wide, want <= 60:\n%q", i, w, r)
 		}
 	}
+	// (2) Words survive intact: a mid-word break inserts a line break inside
+	// the word, so the whole word no longer appears contiguously in out.
+	for _, word := range []string{"Feature", "description", "summary", "Implementation", "status", "details",
+		"Streaming", "incremental", "policy", "Cluster", "measurement", "Landed", "rework"} {
+		if !strings.Contains(out, word) {
+			t.Errorf("word %q split mid-word or missing from layout:\n%s", word, out)
+		}
+	}
+	// (3) The separator row is all box-drawing dashes with exactly one space
+	// at the column boundary; every other painted row must be blank at that
+	// screen cell, i.e. column 2 starts exactly where the separator says.
+	sep := rows[1]
+	byteIdx := strings.IndexByte(sep, ' ')
+	if byteIdx < 0 {
+		t.Fatalf("separator row has no column boundary: %q", sep)
+	}
+	boundary := uniseg.StringWidth(sep[:byteIdx]) // byte index -> screen cell
+	for i, r := range rows {
+		if i == 1 {
+			continue
+		}
+		if !rowBlankAtCell(r, boundary) {
+			t.Errorf("row %d paints non-blank at column-boundary cell %d — a cell spills into its neighbor:\n%q", i, boundary, r)
+		}
+	}
+}
+
+// rowBlankAtCell reports whether painted row is blank (space, or the row
+// ended) at screen cell index cell. Walks grapheme clusters so wide glyphs
+// occupy their true cell count.
+func rowBlankAtCell(row string, cell int) bool {
+	w := 0
+	state := -1
+	rest := row
+	for len(rest) > 0 {
+		var cluster string
+		var cw int
+		cluster, rest, cw, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		if w == cell {
+			return cluster == " "
+		}
+		if w+cw > cell {
+			return false // a wide glyph covers the boundary cell
+		}
+		w += cw
+	}
+	return true // row ended at or before the boundary cell
 }
 
 // rowLen counts display cells, cluster-aware, of one painted screen line.

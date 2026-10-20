@@ -2,6 +2,7 @@ package tviewmd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/rivo/tview"
@@ -101,6 +102,15 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 	for _, row := range t.Rows {
 		for i := 0; i < cols && i < len(row); i++ {
 			widths[i] = max(widths[i], cellPaintedWidth(row[i]))
+		}
+	}
+	// Width-constrained tables: with a width budget, plan column widths that
+	// fit it; when the plan differs from max-content, rows re-flow as
+	// multi-line grids instead of leaving tview to fold them as prose.
+	if opts.Width > 0 {
+		if planned := solveColumnWidths(t, opts.Width-(cols-1)); !slices.Equal(planned, widths) {
+			renderTableWrapped(b, t, planned, opts)
+			return
 		}
 	}
 	// Header row (bold).
@@ -295,6 +305,336 @@ func colTokenFloor(t TableData, col, natural int) int {
 		return 0
 	}
 	return max(widest, 1)
+}
+
+// renderTableWrapped paints a table whose planned column widths are narrower
+// than max-content. Each cell wraps within its column at word boundaries, a
+// logical row grows to as many physical lines as its tallest cell needs, and
+// every physical line keeps the space-separated column skeleton, so the
+// columns stay aligned without relying on tview to wrap anything.
+func renderTableWrapped(b *strings.Builder, t TableData, widths []int, opts Options) {
+	cols := len(widths)
+	if len(t.Header) > 0 {
+		for _, line := range renderWrappedRow(t.Header, widths, opts) {
+			b.WriteString(tag("", "", "b"))
+			b.WriteString(line)
+			b.WriteString(closeTag())
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString(tag(opts.Theme.Hr, "", ""))
+	for i := 0; i < cols; i++ {
+		if i > 0 {
+			b.WriteString(" ")
+		}
+		b.WriteString(strings.Repeat("─", widths[i]))
+	}
+	b.WriteString(closeTag())
+	b.WriteString("\n")
+	for _, row := range t.Rows {
+		padded := make([]TableCell, cols)
+		for i := 0; i < cols && i < len(row); i++ {
+			padded[i] = row[i]
+		}
+		for _, line := range renderWrappedRow(padded, widths, opts) {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+}
+
+// cellToken is one unbreakable piece of a cell's painted content in the
+// width-constrained layout. text never contains ASCII whitespace. pre marks a
+// forced line break before this token (a "\n" in the source cell text); glue
+// marks a token that continues the previous one with no intervening source
+// whitespace -- goldmark splits styled mid-word runs ("**bo**ld" -> "bo"+"ld")
+// and adjacent segments paint back-to-back, so a glued token must not get a
+// space painted before it and must not be separated from its predecessor by
+// wrapping unless nothing else fits.
+type cellToken struct {
+	text string
+	seg  Segment
+	pre  bool
+	glue bool
+}
+
+// isASCIISpaceByte reports whether b is an ASCII whitespace byte. Non-ASCII
+// whitespace (e.g. U+00A0) is deliberately NOT a token boundary -- it is
+// measured as painted content, and a token containing it simply hard-breaks
+// at cluster boundaries if it exceeds its column.
+func isASCIISpaceByte(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
+	}
+	return false
+}
+
+// cellTokens flattens a cell into word-level tokens carrying their source
+// segment's treatment. Runs of ASCII whitespace separate tokens (runs
+// containing "\n" force a break before the next token); whitespace itself is
+// dropped and re-synthesized as single spaces when lines are joined, so a
+// re-flowed cell may paint fewer separating spaces than its source had. Link
+// decorations are emitted as explicit "(url)" tokens exactly where
+// renderSegmentGroup would paint them, using its condition verbatim.
+func cellTokens(c TableCell) []cellToken {
+	var toks []cellToken
+	var open *cellToken
+	carryGlue := false
+	pendingBreak := false
+	// groupText accumulates the raw (untrimmed) text of the current
+	// same-treatment segment group, mirroring the group walk in
+	// cellPaintedWidth/renderSegments, to evaluate the decoration condition.
+	var groupText strings.Builder
+	flush := func() {
+		if open != nil {
+			toks = append(toks, *open)
+			open = nil
+		}
+	}
+	closeGroup := func(link string, seg Segment) {
+		raw := groupText.String()
+		if raw != "" && link != "" && raw != link {
+			toks = append(toks, cellToken{text: "(" + link + ")", seg: seg})
+		}
+		groupText.Reset()
+	}
+	for si, s := range c.Segments {
+		if si == 0 || !sameSegmentTreatment(c.Segments[si-1], s) {
+			// A new treatment group starts: the previous one may earn a
+			// decoration token right here, before any of the new group's
+			// tokens, preserving paint order.
+			var link string
+			if si > 0 {
+				link = c.Segments[si-1].Link
+				closeGroup(link, c.Segments[si-1])
+			}
+		}
+		groupText.WriteString(s.Text)
+		for i := 0; i < len(s.Text); i++ {
+			ch := s.Text[i]
+			if isASCIISpaceByte(ch) {
+				flush()
+				if ch == '\n' {
+					pendingBreak = true
+				}
+				carryGlue = false
+				continue
+			}
+			if open == nil {
+				open = &cellToken{seg: s, pre: pendingBreak, glue: carryGlue}
+				pendingBreak = false
+			} else if !sameSegmentTreatment(open.seg, s) {
+				// Mid-word style change: the new token continues the word, so it
+				// glues to its predecessor (no painted space, no wrap gap).
+				flush()
+				open = &cellToken{seg: s, glue: true}
+			}
+			open.text += string(ch)
+			carryGlue = true
+		}
+	}
+	flush()
+	if len(c.Segments) > 0 {
+		last := c.Segments[len(c.Segments)-1]
+		closeGroup(last.Link, last)
+	}
+	return toks
+}
+
+// splitWideToken splits text into chunks of at most width display cells at
+// grapheme-cluster boundaries -- the hard-break of last resort for tokens
+// wider than their column. A single cluster wider than width (a two-cell
+// emoji in a one-cell column) is emitted on its own line and accepted as
+// overflow; the loop always terminates because every iteration consumes at
+// least one cluster.
+func splitWideToken(text string, width int) []string {
+	if width <= 0 || uniseg.StringWidth(text) <= width {
+		return []string{text}
+	}
+	var chunks []string
+	var cur strings.Builder
+	curW := 0
+	state := -1
+	rest := text
+	for len(rest) > 0 {
+		var cluster string
+		var w int
+		cluster, rest, w, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		if curW+w > width && cur.Len() > 0 {
+			chunks = append(chunks, cur.String())
+			cur.Reset()
+			curW = 0
+		}
+		cur.WriteString(cluster)
+		curW += w
+	}
+	if cur.Len() > 0 {
+		chunks = append(chunks, cur.String())
+	}
+	return chunks
+}
+
+// wrapTokens lays tokens out into lines of at most width display cells.
+// Breaks happen at token boundaries (the painted space between tokens, or a
+// forced pre break); a token wider than width hard-breaks at cluster
+// boundaries via splitWideToken. Glued tokens prefer to share a line with
+// their predecessor but may be separated when nothing else fits -- that is a
+// mid-word style boundary, which wraps no worse than a hard break. width <= 0
+// disables wrapping entirely (one line, whatever it costs).
+func wrapTokens(toks []cellToken, width int) [][]cellToken {
+	if width <= 0 {
+		return [][]cellToken{toks}
+	}
+	var lines [][]cellToken
+	var cur []cellToken
+	curW := 0
+	closeLine := func() {
+		lines = append(lines, cur)
+		cur = nil
+		curW = 0
+	}
+	for _, tok := range toks {
+		tw := uniseg.StringWidth(tok.text)
+		gap := 1
+		if tok.glue {
+			gap = 0
+		}
+		if len(cur) > 0 && (tok.pre || curW+gap+tw > width) {
+			closeLine()
+		}
+		if tw > width {
+			// Hard-break: every chunk but the last fills a line of its own;
+			// the last chunk starts the next line and may take more tokens.
+			chunks := splitWideToken(tok.text, width)
+			for k, chunk := range chunks {
+				nt := cellToken{text: chunk, seg: tok.seg, glue: tok.glue && k == 0}
+				cur = append(cur, nt)
+				if k < len(chunks)-1 {
+					closeLine()
+				}
+			}
+			curW = uniseg.StringWidth(chunks[len(chunks)-1])
+			continue
+		}
+		cur = append(cur, tok)
+		curW += gap + tw
+	}
+	if len(cur) > 0 || len(lines) == 0 {
+		lines = append(lines, cur)
+	}
+	return lines
+}
+
+// tokenLinePaintedWidth returns the display width a painted line of tokens
+// occupies: token widths plus one cell for every inter-token space (glued
+// tokens paint none). It must agree with what renderTokenLine paints.
+func tokenLinePaintedWidth(toks []cellToken) int {
+	w := 0
+	for i, tok := range toks {
+		if i > 0 && !tok.glue {
+			w++
+		}
+		w += uniseg.StringWidth(tok.text)
+	}
+	return w
+}
+
+// renderTokenGroup renders one same-treatment run of tokens as a single
+// escaped unit. It mirrors renderSegmentGroup's style branches exactly but
+// never appends a link decoration: in the wrapped layout the decoration is an
+// explicit token (cellTokens), so appending one here would paint it twice.
+func renderTokenGroup(s0 Segment, raw string, opts Options) string {
+	if raw == "" {
+		return ""
+	}
+	text := tview.Escape(raw)
+	if s0.Link != "" {
+		col := opts.Theme.Link
+		if opts.Theme == (Theme{}) {
+			col = DefaultTheme().Link
+		}
+		return tag(col, "", "u") + text + closeTag()
+	}
+	if s0.Code {
+		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag()
+	}
+	if s0.Style == (Style{}) {
+		return text
+	}
+	return tag(s0.Style.FG, s0.Style.BG, flagsOf(s0.Style)) + text + closeTag()
+}
+
+// renderTokenLine paints one physical line of tokens: consecutive tokens with
+// the same treatment merge and escape as a single unit (the same merged-escape
+// rule as renderSegments -- a tag-shaped bracket pair must be neutralized per
+// line regardless of how goldmark split it), with one space between tokens
+// except where glue says the source had none.
+func renderTokenLine(toks []cellToken, opts Options) string {
+	var b strings.Builder
+	for i := 0; i < len(toks); {
+		j := i
+		for j+1 < len(toks) && sameSegmentTreatment(toks[j].seg, toks[j+1].seg) {
+			j++
+		}
+		group := toks[i : j+1]
+		var tb strings.Builder
+		for k, tok := range group {
+			if k > 0 && !tok.glue {
+				tb.WriteString(" ")
+			}
+			tb.WriteString(tok.text)
+		}
+		if i > 0 && !group[0].glue {
+			b.WriteString(" ")
+		}
+		b.WriteString(renderTokenGroup(group[0].seg, tb.String(), opts))
+		i = j + 1
+	}
+	return b.String()
+}
+
+// renderWrappedRow renders one logical row as its physical lines: every cell
+// wraps to its column width, the row is as tall as its tallest cell, and each
+// line pads every cell to that cell's column width so the columns line up on
+// every painted line. Alignment honors the cell's own Align, like the
+// unwrapped renderTableRow.
+func renderWrappedRow(cells []TableCell, widths []int, opts Options) []string {
+	cellLines := make([][][]cellToken, len(cells))
+	rowH := 1
+	for i, c := range cells {
+		w := 1
+		if i < len(widths) {
+			w = max(widths[i], 1)
+		}
+		cellLines[i] = wrapTokens(cellTokens(c), w)
+		rowH = max(rowH, len(cellLines[i]))
+	}
+	out := make([]string, rowH)
+	for p := 0; p < rowH; p++ {
+		var b strings.Builder
+		for i := range cells {
+			if i > 0 {
+				b.WriteString(" ")
+			}
+			content := ""
+			pw := 0
+			if p < len(cellLines[i]) {
+				content = renderTokenLine(cellLines[i][p], opts)
+				pw = tokenLinePaintedWidth(cellLines[i][p])
+			}
+			colW := 0
+			if i < len(widths) {
+				colW = widths[i]
+			}
+			left, right := alignPad(cells[i].Align, pw, colW)
+			b.WriteString(strings.Repeat(" ", left))
+			b.WriteString(content)
+			b.WriteString(strings.Repeat(" ", right))
+		}
+		out[p] = b.String()
+	}
+	return out
 }
 
 // cellPlainWidth returns the display width of a cell's visible text. It is
