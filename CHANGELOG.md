@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.4.1] - 2026-11-23
+
+### Fixed
+
+- A partial theme with `InlineCodeBG: ""` no longer picks up the default `#3a3a3a` highlight background. Empty now means transparent again, so code spans keep only the caller's foreground color. Set `InlineCodeBG` to `"default"` to inherit the terminal background, or to a color to restore a highlight. The zero `Theme` still uses every `DefaultTheme()` color, including the highlight.
+
 ## [v0.4.0] - 2026-11-23
 
 ### Changed
@@ -47,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run the fuzz target in its package instead of `./...`.
 - Satisfy golangci-lint v2 on the preview CLI and render path.
 
-[Unreleased]: https://github.com/buchenberg/tviewmd/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/buchenberg/tviewmd/compare/v0.4.1...HEAD
+[v0.4.1]: https://github.com/buchenberg/tviewmd/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/buchenberg/tviewmd/releases/tag/v0.4.0
 [v0.3.1]: https://github.com/buchenberg/tviewmd/releases/tag/v0.3.1

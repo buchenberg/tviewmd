@@ -38,7 +38,16 @@ func DefaultTheme() Theme {
 // WithDefaults fills each empty color field of t from DefaultTheme, leaving
 // explicitly set fields untouched. Defaulting is per field, not per struct: a
 // theme that changes only Link keeps the default heading, code and rule colors.
+//
+// The zero Theme still means "use every default". In a partial theme, however,
+// an empty InlineCodeBG is an explicit request for a transparent background:
+// code spans take the caller's foreground color without a highlight behind
+// them. Set InlineCodeBG to "default" to inherit the terminal background, or
+// to a color to opt back into a highlight.
 func (t Theme) WithDefaults() Theme {
+	if t == (Theme{}) {
+		return DefaultTheme()
+	}
 	d := DefaultTheme()
 	for i := range t.Heading {
 		if t.Heading[i] == "" {
@@ -51,9 +60,8 @@ func (t Theme) WithDefaults() Theme {
 	if t.InlineCodeFG == "" {
 		t.InlineCodeFG = d.InlineCodeFG
 	}
-	if t.InlineCodeBG == "" {
-		t.InlineCodeBG = d.InlineCodeBG
-	}
+	// InlineCodeBG is deliberately left empty: in a partial theme an empty
+	// background is the caller's way of asking for no highlight.
 	if t.CodeBlockFG == "" {
 		t.CodeBlockFG = d.CodeBlockFG
 	}

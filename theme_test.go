@@ -53,6 +53,53 @@ func TestZeroThemeStillUsesDefaults(t *testing.T) {
 	}
 }
 
+// TestPartialThemeEmptyInlineCodeBGStaysTransparent covers the v0.4.0
+// regression: per-field defaulting replaced an explicitly empty background
+// with DefaultTheme's highlight, so code spans gained a lighter background
+// they were not supposed to have. An empty background in a partial theme must
+// stay empty so the caller gets only the foreground color change.
+func TestPartialThemeEmptyInlineCodeBGStaysTransparent(t *testing.T) {
+	theme := Theme{
+		Link:         "#00ffff",
+		InlineCodeFG: "#9988bb",
+		InlineCodeBG: "",
+	}
+	if got := theme.WithDefaults().InlineCodeBG; got != "" {
+		t.Errorf("empty InlineCodeBG was defaulted to %q, want transparent", got)
+	}
+
+	out := Render("`code`", Options{Theme: theme})
+	if want := "[#9988bb::]code"; !strings.Contains(out, want) {
+		t.Errorf("code span missing transparent-background tag %q:\n%s", want, out)
+	}
+	if strings.Contains(out, DefaultTheme().InlineCodeBG) {
+		t.Errorf("code span gained the default highlight background:\n%s", out)
+	}
+}
+
+// TestPartialThemeExplicitInlineCodeBGKept makes sure opting back into a
+// highlight still works, as does asking tview to inherit the terminal color.
+func TestPartialThemeExplicitInlineCodeBGKept(t *testing.T) {
+	for _, bg := range []string{"#123456", "default"} {
+		theme := Theme{InlineCodeFG: "#ffffff", InlineCodeBG: bg}
+		if got := theme.WithDefaults().InlineCodeBG; got != bg {
+			t.Errorf("WithDefaults changed explicit InlineCodeBG %q to %q", bg, got)
+		}
+		out := Render("`code`", Options{Theme: theme})
+		if want := "[#ffffff:" + bg + ":]code"; !strings.Contains(out, want) {
+			t.Errorf("code span missing tag %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestZeroThemeWithDefaultsStillUsesEveryDefault pins the zero-value meaning
+// of Theme now that WithDefaults short-circuits on an all-empty struct.
+func TestZeroThemeWithDefaultsStillUsesEveryDefault(t *testing.T) {
+	if got := (Theme{}).WithDefaults(); got != DefaultTheme() {
+		t.Errorf("zero theme WithDefaults = %+v, want %+v", got, DefaultTheme())
+	}
+}
+
 func TestThemeWithDefaultsExplicitFieldsUntouched(t *testing.T) {
 	custom := Theme{
 		Heading:      [6]string{"a", "b", "c", "d", "e", "f"},
