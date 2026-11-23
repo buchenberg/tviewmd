@@ -44,6 +44,7 @@ func BenchmarkRendererAppendString(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		r.Reset() // measure a bounded append+render, not an ever-growing document
 		r.Append(chunks[i%len(chunks)])
 		_ = r.String()
 	}

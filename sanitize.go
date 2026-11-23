@@ -35,6 +35,15 @@ func sanitizeText(s string) string {
 				continue
 			}
 			r, size := utf8.DecodeRuneInString(s[i:])
+			if r == utf8.RuneError && size == 1 { // raw 8-bit byte
+				if !changed {
+					b.Grow(len(s))
+					b.WriteString(s[:i])
+					changed = true
+				}
+				i++
+				continue
+			}
 			if r >= 0x80 && r <= 0x9f { // C1 controls encoded as UTF-8
 				if !changed {
 					b.Grow(len(s))

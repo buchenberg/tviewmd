@@ -52,3 +52,18 @@ func TestZeroThemeStillUsesDefaults(t *testing.T) {
 		t.Errorf("zero theme differs from explicit DefaultTheme:\nzero:\n%s\ndefault:\n%s", zero, explicit)
 	}
 }
+
+func TestThemeWithDefaultsExplicitFieldsUntouched(t *testing.T) {
+	custom := Theme{
+		Heading:      [6]string{"a", "b", "c", "d", "e", "f"},
+		Link:         "l",
+		InlineCodeFG: "fg",
+		InlineCodeBG: "bg",
+		CodeBlockFG:  "code",
+		QuoteFG:      "quote",
+		Hr:           "hr",
+	}
+	if got := custom.WithDefaults(); got != custom {
+		t.Errorf("WithDefaults changed a fully explicit theme:\n got=%+v\nwant=%+v", got, custom)
+	}
+}

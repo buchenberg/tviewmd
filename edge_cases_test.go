@@ -37,7 +37,7 @@ func TestLinkURLBracketsAreEscaped(t *testing.T) {
 	if !strings.Contains(out, "label (https://x/)") {
 		t.Errorf("link decoration lost: %q", out)
 	}
-	if !tagsBalanced(Render("[label](https://x/[y])", Options{})) {
+	if !paintedTagsConsumed(Render("[label](https://x/[y])", Options{}), 80) {
 		t.Errorf("bracketed link text injected a tag")
 	}
 }
@@ -101,10 +101,10 @@ func TestPlainText(t *testing.T) {
 	}
 }
 
-func TestTagsBalancedAcrossFeatures(t *testing.T) {
+func TestTagsConsumedAcrossFeatures(t *testing.T) {
 	src := "# H\n\n**b** [l](u) `c`\n\n| a |\n|---|\n| \x1b[31mx\x1b[0m |\n"
-	if out := Render(src, Options{}); !tagsBalanced(out) {
-		t.Errorf("unbalanced tags: %q", out)
+	if out := Render(src, Options{}); !paintedTagsConsumed(out, 80) {
+		t.Errorf("tview tag leaked into painted text: %q", out)
 	}
 }
 
@@ -123,5 +123,13 @@ func TestRenderLinesIncludesTableSpacers(t *testing.T) {
 	}
 	if got, want := RenderLines(src, Options{TableRowSpacing: CompactTableRows}), RenderLines(src, Options{}); len(got) != len(want)-1 {
 		t.Errorf("compact layout = %d lines, want %d", len(got), len(want)-1)
+	}
+}
+
+func TestWrappedAdjacentSameURLLinks(t *testing.T) {
+	src := "| Cell |\n|---|\n| [a](u)[b](u) |\n"
+	out := stripTags(Render(src, Options{Width: 12}))
+	if got := strings.Count(out, "(u)"); got != 2 {
+		t.Errorf("wrapped path painted %d decorations, want 2: %q", got, out)
 	}
 }

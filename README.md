@@ -59,7 +59,10 @@ func main() {
 Render markdown to a tview TextView:
 
 ```go
-import "github.com/buchenberg/tviewmd"
+import (
+    "github.com/buchenberg/tviewmd"
+    "github.com/rivo/tview"
+)
 
 // Simple rendering with defaults
 output := tviewmd.Render("# Heading\n\nParagraph text.", tviewmd.Options{})
@@ -126,7 +129,8 @@ output := tviewmd.Render(markdown, tviewmd.Options{
 
 ### Streaming LLM Output
 
-For real-time rendering of streaming LLM responses:
+For real-time rendering of streaming LLM responses, the recommended API is
+`Renderer` (see below); the lower-level pattern is:
 
 ```go
 func renderLLMStream(app *tview.Application, stream <-chan []byte, textView *tview.TextView) {
@@ -274,8 +278,17 @@ discarded), raw HTML is literal text, and `AlignDefault` renders like
 | `Parse(src string) ([]Block, error)` | Parse markdown into renderer-neutral blocks |
 | `RenderTView(blocks []Block, opts Options) string` | Render parsed blocks to tview tags |
 | `PlainText(segs []Segment) string` | Concatenate segment text without rendering tview tags |
+| `RenderLines(src string, opts Options) []string` | Render and split into planned physical lines (including table spacers) |
 
 ### Types
+
+#### Constants
+
+| Constant | Meaning |
+|----------|---------|
+| `CompactTableRows` | `Options.TableRowSpacing` value that disables blank lines between table rows |
+| `DefaultMaxStreamBytes` | Default `Renderer` stream cap (8 MiB) |
+| `ErrStreamTooLarge` | Reported by `Renderer.Err`/`Write` when the stream cap is hit |
 
 #### Options
 
@@ -305,6 +318,20 @@ visible in a `tview.TextView`. To restore the dense pre-spacing layout:
 
 ```go
 out := tviewmd.Render(markdown, tviewmd.Options{TableRowSpacing: tviewmd.CompactTableRows})
+```
+
+#### Renderer
+
+`Renderer` is a concurrency-safe streaming buffer. `NewRenderer(opts)` starts
+one; `Append(string)`, `Write([]byte)` (so it implements `io.Writer`), `String`,
+`Source`, `Reset`, `SetOptions`, `SetWidth` and `Err` operate on it.
+
+```go
+r := tviewmd.NewRenderer(tviewmd.Options{})
+r.Append(chunk)
+text := r.String()
+r.SetWidth(width)     // re-layout the buffered source
+r.SetOptions(opts)    // replace all options, keep the source
 ```
 
 #### Theme
@@ -516,7 +543,7 @@ For large markdown documents (>10KB):
    throttle := time.Tick(100 * time.Millisecond)  // Less frequent updates
    ```
 
-3. **Pre-parse** if re-rendering the same content:
+2. **Pre-parse** if re-rendering the same content:
    ```go
    blocks, _ := tviewmd.Parse(markdown)
    // Cache blocks, then render with different options
@@ -557,7 +584,8 @@ make build   # Build project
 
 ## Status
 
-tviewmd is a standalone, production-ready library at `github.com/buchenberg/tviewmd`.
+tviewmd is a standalone library at `github.com/buchenberg/tviewmd` (pre-v1.0;
+see AGENTS.md for the versioning policy).
 
 ## Testing
 

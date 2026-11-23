@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # go.mod requires go 1.25.8; older legs only download a newer toolchain.
+        # Keep this in sync with the `go` directive in go.mod (1.25.8).
         go-version: ['1.25.x']
     steps:
       - name: Checkout code

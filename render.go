@@ -107,7 +107,7 @@ type Options struct {
 	// in a tview.TextView; -1 selects the compact layout with no blank lines;
 	// larger positive values add that many blank lines. Spacing is applied
 	// between logical rows only -- never after the last row, so Render's
-	// trailing-newline trimming is unaffected.
+	// trailing-newline trimming is unaffected. Values above 64 are clamped.
 	TableRowSpacing int
 
 	// MaxStreamBytes bounds how much raw source a Renderer accumulates.

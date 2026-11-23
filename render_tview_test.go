@@ -899,3 +899,21 @@ func TestRenderHeaderKeepsBoldAfterLink(t *testing.T) {
 		}
 	})
 }
+
+// TestRenderMultiParagraphBlockquoteKeepsStyleAfterLink: the nested-block path
+// must resume the quote style after an inline link, just like the legacy
+// single-paragraph path does.
+func TestRenderMultiParagraphBlockquoteKeepsStyleAfterLink(t *testing.T) {
+	baseline, ok := cellStyleForSize(t, Render("> QQQ", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	got, ok := cellStyleForSize(t, Render("> first [link](u) QQQ\n>\n> second", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing trailing sentinel after link in nested quote")
+	}
+	requireAttr(t, "nested quote baseline", baseline, tcell.AttrItalic)
+	if got != baseline {
+		t.Errorf("nested quote style not resumed after link\n got=%#v\nwant=%#v", got, baseline)
+	}
+}

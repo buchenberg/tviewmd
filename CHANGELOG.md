@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Tables now paint one blank line between body rows by default; pass `CompactTableRows` as `Options.TableRowSpacing` for the dense layout. Consumers that count painted rows must account for these spacer lines (`RenderLines` includes them).
+- Partial themes now inherit unspecified colors from `DefaultTheme()` instead of blanking them. A caller that deliberately leaves a field empty for transparency (for example `Theme{InlineCodeBG: ""}`) must now set `"default"` explicitly, or use `NoColorTheme()`.
+
 ### Added
 
-- `tviewmd.PlainText([]Segment) string` for extracting plain text from a segment slice.
+- `tviewmd.PlainText([]Segment) string` for extracting plain text from a segment slice, and `tviewmd.RenderLines(src, opts) []string` for the planned physical lines.
+- `ErrStreamTooLarge` and `DefaultMaxStreamBytes` for the `Renderer` stream cap.
 - Configurable table row spacing via `Options.TableRowSpacing` and `CompactTableRows`; tables paint one blank line between body rows by default.
 - Per-field theme defaulting with `Theme.WithDefaults`, plus `NoColorTheme` for NO_COLOR / monochrome terminals.
 - `Renderer.SetOptions`, `Renderer.SetWidth`, `Renderer.Err` and `Options.MaxStreamBytes` for reconfiguring a live stream and capping runaway input.
@@ -21,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve emphasis on links and inline code spans instead of dropping it.
 - Adjacent links sharing a URL keep separate decorations (`Segment.LinkID`).
 - Empty fenced code blocks no longer emit tag-only blank output.
-- Documentation and CI consistency: golangci-lint v2 config, install script and CI aligned; the CI Go matrix now matches `go.mod`; the fuzz target runs in its package; releases no longer attach a fake binary built from the library root.
+- Documentation and CI consistency: golangci-lint v2 config, install script and CI aligned; the CI Go matrix now matches `go.mod`; releases no longer attach a fake binary built from the library root.
 
 ## [v0.3.1] - 2026-10-20
 

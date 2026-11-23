@@ -17,6 +17,7 @@ func TestSanitizeText(t *testing.T) {
 		{"bare ESC", "a\x1bb", "ab"},
 		{"NUL and DEL", "a\x00b\x7fc", "abc"},
 		{"C1 control", "a\u009bb", "ab"},
+		{"raw 8-bit C1", "a\x9bb", "ab"},
 		{"mixed", "keep \x1b[1mmore\x00", "keep more"},
 	}
 	for _, tc := range cases {
@@ -63,5 +64,18 @@ func TestRenderTViewSanitizesHandBuiltBlocks(t *testing.T) {
 	out := RenderTView(blocks, Options{})
 	if strings.Contains(out, "\x1b") || strings.Contains(out, "31m") {
 		t.Errorf("hand-built block leaked ANSI: %q", out)
+	}
+}
+
+func TestSanitizeIncompleteSequences(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"a\x1b[31", "a"},
+		{"a\x1b]0;title", "a"},
+		{"a\x1b", "a"},
+	}
+	for _, tc := range cases {
+		if got := sanitizeText(tc.in); got != tc.want {
+			t.Errorf("sanitizeText(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

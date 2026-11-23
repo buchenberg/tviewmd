@@ -39,6 +39,9 @@ func TestRendererSetOptionsChangesTheme(t *testing.T) {
 	if strings.Contains(out, "#") {
 		t.Errorf("SetOptions did not apply the new theme: %q", out)
 	}
+	if !strings.Contains(out, "default") {
+		t.Errorf("SetOptions output has no inheriting tags: %q", out)
+	}
 }
 
 func TestRendererStreamCap(t *testing.T) {
@@ -82,5 +85,44 @@ func TestRendererUnlimitedStream(t *testing.T) {
 	}
 	if len(r.Source()) != DefaultMaxStreamBytes+1 {
 		t.Errorf("unlimited stream truncated to %d bytes", len(r.Source()))
+	}
+}
+
+func TestRendererStreamCapBoundaries(t *testing.T) {
+	r := NewRenderer(Options{MaxStreamBytes: 4})
+	r.Append("abcd") // exact fit, no error
+	if r.Err() != nil || r.Source() != "abcd" {
+		t.Errorf("exact fit failed: err=%v source=%q", r.Err(), r.Source())
+	}
+	r.Append("e") // zero room
+	if !errors.Is(r.Err(), ErrStreamTooLarge) || r.Source() != "abcd" {
+		t.Errorf("zero-room append: err=%v source=%q", r.Err(), r.Source())
+	}
+	n, err := r.Write([]byte("fg"))
+	if n != 0 || !errors.Is(err, ErrStreamTooLarge) {
+		t.Errorf("write on full stream = (%d, %v)", n, err)
+	}
+}
+
+func TestRendererConcurrentReconfiguration(t *testing.T) {
+	r := NewRenderer(Options{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			_, _ = r.Write([]byte("chunk "))
+			r.SetWidth(40 + i%20)
+			r.SetOptions(Options{Width: 60, Theme: NoColorTheme()})
+			_ = r.Err()
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		_ = r.String()
+		_ = r.Source()
+	}
+	<-done
+	r.Reset()
+	if r.Err() != nil {
+		t.Errorf("reset did not clear error: %v", r.Err())
 	}
 }

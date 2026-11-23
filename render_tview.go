@@ -60,14 +60,11 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		b.WriteString("\n")
 	case BlockBlockquote:
 		ambient := tag(opts.Theme.QuoteFG, "", "i")
-		// A single inline paragraph is handled by the legacy path: it passes
-		// the quote ambient into renderSegments so the style resumes after an
-		// inline link or code span. Nested rendering is for actual structure.
-		singleParagraph := len(blk.Blocks) == 1 && blk.Blocks[0].Kind == BlockParagraph
-		if !singleParagraph && len(blk.Blocks) > 0 {
-			// Full structure: every child block keeps its own kind (code,
-			// list, table, heading), each line carrying the quote bar.
-			for _, line := range renderNestedLines(blk.Blocks, opts, width, depth) {
+		if len(blk.Blocks) > 0 {
+			// Every child block keeps its own kind (code, list, table,
+			// heading), each line carrying the quote bar. Paragraph children
+			// receive the quote ambient so their style resumes after links.
+			for _, line := range renderNestedLines(blk.Blocks, opts, width, depth, ambient) {
 				b.WriteString(ambient)
 				b.WriteString("▎ ")
 				b.WriteString(line)
@@ -91,9 +88,16 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 
 // renderNestedLines renders a slice of child blocks into physical lines with
 // no trailing newline. Hand-built Blocks use the legacy flattened fields.
-func renderNestedLines(blocks []Block, opts Options, width, depth int) []string {
+func renderNestedLines(blocks []Block, opts Options, width, depth int, ambient string) []string {
 	var tmp strings.Builder
 	for _, child := range blocks {
+		if child.Kind == BlockParagraph {
+			// A paragraph nested in a quote must resume the quote style after
+			// each inner tag reset; the generic block painter uses no ambient.
+			tmp.WriteString(renderSegments(child.Segments, opts, ambient))
+			tmp.WriteString("\n")
+			continue
+		}
 		renderBlock(&tmp, child, opts, width, depth)
 	}
 	s := strings.TrimRight(tmp.String(), "\n")
@@ -110,7 +114,7 @@ func renderList(b *strings.Builder, items []ListItem, opts Options, width, depth
 		if it.Ordered {
 			marker = fmt.Sprintf("%d. ", it.Index)
 		}
-		if lines := renderNestedLines(it.Blocks, opts, width, depth+1); len(lines) > 0 {
+		if lines := renderNestedLines(it.Blocks, opts, width, depth+1, ""); len(lines) > 0 {
 			// The item's first block follows the marker; later blocks and
 			// wrapped continuation lines are indented under it.
 			b.WriteString(indent)
@@ -145,6 +149,10 @@ func renderCode(cb CodeBlock, opts Options) string {
 	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(sanitizeText(source)) + closeTag()
 }
 
+// maxTableRowSpacing bounds Options.TableRowSpacing so an absurd value cannot
+// make strings.Repeat panic. Anything beyond a screenful is not useful.
+const maxTableRowSpacing = 64
+
 // tableBlankLines returns how many blank lines to paint between table body
 // rows. The zero value of Options selects one; CompactTableRows (-1) selects
 // none; positive values are used verbatim.
@@ -156,6 +164,8 @@ func tableBlankLines(opts Options) int {
 		return 0
 	case opts.TableRowSpacing == 0:
 		return 1
+	case opts.TableRowSpacing > maxTableRowSpacing:
+		return maxTableRowSpacing
 	default:
 		return opts.TableRowSpacing
 	}
@@ -496,7 +506,7 @@ func cellTokens(c TableCell) []cellToken {
 			toks = flushOpen(toks, open)
 			open = nil
 			prev := c.Segments[si-1]
-			if prev.Link != s.Link {
+			if prev.Link != s.Link || prev.LinkID != s.LinkID {
 				// The link run ends here; a label may span several treatment
 				// groups ("[**do**cs](u)"), so only the run's last group gets
 				// the decoration.
@@ -908,9 +918,13 @@ func segmentsText(segs []Segment) string {
 	return b.String()
 }
 
-// linkColor returns the link color after per-field theme defaulting.
+// linkColor returns the link color. RenderTView has already applied per-field
+// theme defaulting, so no per-link theme construction is needed here.
 func linkColor(opts Options) string {
-	return opts.Theme.WithDefaults().Link
+	if opts.Theme.Link == "" {
+		return DefaultTheme().Link
+	}
+	return opts.Theme.Link
 }
 
 // linkDecoration paints the " (url)" suffix shown after a link whose label
@@ -969,7 +983,7 @@ func renderStyledRun(s0 Segment, plain bool, raw string, opts Options, ambient s
 	case s0.Link != "":
 		flags := treatmentFlags(s0, "u")
 		if plain {
-			flags = treatmentFlags(s0, "")
+			flags = "" // link decorations never inherit label emphasis
 		}
 		return tag(linkColor(opts), "", flags) + text + closeTag() + ambient
 	case s0.Code:

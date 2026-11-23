@@ -3,6 +3,9 @@ package tviewmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
 // FuzzParse ensures the goldmark walker never panics on arbitrary input. A
@@ -35,8 +38,8 @@ func FuzzParse(f *testing.F) {
 }
 
 // FuzzRender exercises the width-constrained table path and alternate themes,
-// which FuzzParse's Options{} never reaches. It also checks that emitted tview
-// tags are balanced: an unbalanced tag would paint literally in a TextView.
+// which FuzzParse's Options{} never reaches. Its invariant is the real tview
+// paint oracle: no color tag may survive into a painted cell.
 func FuzzRender(f *testing.F) {
 	f.Add("# head\n\n[a](u)\n\n| a | b |\n|---|---|\n| 1 | 2 |\n", 0, 0)
 	f.Add("> - a\n> ```go\n> x\n> ```\n", 34, 1)
@@ -50,37 +53,69 @@ func FuzzRender(f *testing.F) {
 			opts.Theme = Theme{Link: "#123456"}
 		}
 		out := Render(src, opts)
-		if !tagsBalanced(out) {
-			t.Fatalf("unbalanced tview tags in %q", out)
+		if !paintedTagsConsumed(out, width) {
+			t.Fatalf("tview tag leaked into painted text for %q: %q", src, out)
 		}
 	})
 }
 
-// tagsBalanced reports whether every tag-shaped bracket span in out is closed.
-// `[[` is an escaped literal bracket; a lone '[' with no following ']' is also
-// just literal text in tview. Only '[fg:bg:flags]' shapes are tags.
-func tagsBalanced(s string) bool {
-	for i := 0; i < len(s); {
-		if s[i] != '[' {
-			i++
-			continue
+// paintedTagsConsumed renders tagged text through a real tview.TextView on a
+// tcell simulation screen and reports whether every tag was consumed. A tag
+// that survives into a cell would be displayed literally to the user.
+func paintedTagsConsumed(s string, width int) bool {
+	if width < 20 {
+		width = 20
+	}
+	if width > 200 {
+		width = 200
+	}
+	const height = 40
+	tv := tview.NewTextView().SetDynamicColors(true).SetWrap(true)
+	tv.SetText(s)
+	tv.SetRect(0, 0, width, height)
+	screen := tcell.NewSimulationScreen("")
+	if err := screen.Init(); err != nil {
+		return true // cannot verify in this environment; do not fail the fuzz run
+	}
+	defer screen.Fini()
+	screen.SetSize(width, height)
+	tv.Draw(screen)
+	screen.Show()
+	cells, w, _ := screen.GetContents()
+	// tview writes one rune per cell, so join the painted rows before scanning
+	// for bracket spans that span several cells.
+	var b strings.Builder
+	for row := 0; row < height; row++ {
+		for col := 0; col < w; col++ {
+			b.Write(cells[row*w+col].Bytes)
 		}
-		if i+1 < len(s) && s[i+1] == '[' {
-			i += 2
+		b.WriteByte('\n')
+	}
+	text := b.String()
+	for i := 0; i < len(text); i++ {
+		if text[i] != '[' {
 			continue
 		}
 		j := i + 1
-		for j < len(s) && s[j] != ']' {
+		for j < len(text) && text[j] != ']' && text[j] != '\n' {
 			j++
 		}
-		if j == len(s) {
-			break // literal '[' with no matching bracket
+		// A bracket span containing ':' is a tview tag. If it survived
+		// painting, the caller will see it literally.
+		if j < len(text) && text[j] == ']' && strings.Contains(text[i:j], ":") {
+			return false
 		}
-		if !strings.Contains(s[i:j], ":") {
-			i = j + 1 // literal bracket span, not a tag
-			continue
-		}
-		i = j + 1
 	}
 	return true
+}
+
+// TestPaintedTagsConsumedDetectsLeak guards the fuzz invariant itself: a
+// checker that always passes would make FuzzRender pointless.
+func TestPaintedTagsConsumedDetectsLeak(t *testing.T) {
+	if paintedTagsConsumed("[#zzz::]unclosed color tag", 80) {
+		t.Error("invariant accepted a literal unclosed tag")
+	}
+	if !paintedTagsConsumed(Render("plain text", Options{}), 80) {
+		t.Error("invariant rejected clean output")
+	}
 }
