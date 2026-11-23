@@ -12,9 +12,10 @@ This file contains configuration and instructions for Mistral Vibe when working 
 ## Tooling
 
 ### Linter
-- **Primary**: golangci-lint (v1.61.0)
+- **Primary**: golangci-lint (v2.15.0 — required by `version: "2"` in `.golangci.yml`)
 - **Config**: `.golangci.yml`
 - **Command**: `make lint` or `golangci-lint run --timeout 5m`
+- Install with `make install-linter`; v1.x cannot read this config.
 
 ### Testing
 - **Test Framework**: Go's built-in `testing` package
@@ -35,7 +36,7 @@ This file contains configuration and instructions for Mistral Vibe when working 
 # Install dependencies
 go mod download
 
-# Run all checks
+# Run standard checks (test, lint, build)
 make all
 
 # Run tests with race detector
@@ -47,12 +48,15 @@ golangci-lint run --timeout 5m
 # Build the project
 make build
 
-# Generate coverage report
+# Generate coverage report (separate target, not part of make all)
 make coverage
 
-# Run fuzz tests
+# Run fuzz tests (separate target, not part of make all)
 make fuzz
 ```
+
+`make all` (and its alias `make check`) runs test, lint and build only;
+coverage and fuzzing are separate targets.
 
 ### Git Workflow
 
@@ -85,7 +89,7 @@ git push origin feature/name
 ### Project-Specific
 - Match existing code style and patterns
 - Add tests for all new functionality
-- Document breaking changes in CHANGELOG
+- Document breaking changes in [CHANGELOG.md](CHANGELOG.md)
 - Use ADRs for significant architectural decisions (see `docs/adr/`)
 
 ## Testing Requirements
@@ -141,6 +145,7 @@ git push origin feature/name
 - Function-level godoc comments
 - README.md with usage examples
 - ADRs for architectural decisions (in `docs/adr/`)
+- [CHANGELOG.md](CHANGELOG.md) in Keep a Changelog format for released and unreleased changes
 
 ### Godoc Examples
 ```go
@@ -183,6 +188,7 @@ tviewmd/
 ├── .gitignore                 # Git ignore patterns
 ├── .golangci.yml              # Linter configuration
 ├── AGENTS.md                  # This file
+├── CHANGELOG.md               # Release history (Keep a Changelog)
 ├── Makefile                   # Development targets
 ├── go.mod                     # Go module definition
 ├── go.sum                     # Dependency checksums
@@ -239,4 +245,4 @@ This project follows semantic versioning:
 
 ## Last Updated
 
-2026-08-07
+2026-11-22

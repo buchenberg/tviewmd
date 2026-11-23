@@ -12,36 +12,31 @@ import (
 
 func TestRenderBoldTag(t *testing.T) {
 	out := Render("**hi**", Options{})
-	if !strings.Contains(out, "::b]") {
-		t.Errorf("bold tag missing in %q", out)
-	}
-	if !strings.Contains(out, "hi") {
-		t.Errorf("text missing in %q", out)
+	if !strings.Contains(out, "[::b]hi") {
+		t.Errorf("bold run not painted as one styled span: %q", out)
 	}
 }
 
 func TestRenderItalicTag(t *testing.T) {
 	out := Render("*hi*", Options{})
-	if !strings.Contains(out, "::i]") {
-		t.Errorf("italic tag missing in %q", out)
+	if !strings.Contains(out, "[::i]hi") {
+		t.Errorf("italic run not painted as one styled span: %q", out)
 	}
 }
 
 func TestRenderStrikethroughTag(t *testing.T) {
 	out := Render("~~hi~~", Options{})
-	if !strings.Contains(out, "::s]") {
-		t.Errorf("strike tag missing in %q", out)
+	if !strings.Contains(out, "[::s]hi") {
+		t.Errorf("strikethrough run not painted as one styled span: %q", out)
 	}
 }
 
 func TestRenderInlineCode(t *testing.T) {
 	out := Render("`x`", Options{})
-	// Inline code uses the InlineCodeBG color in the tag.
-	if !strings.Contains(out, "]") {
-		t.Errorf("plain code tag missing in %q", out)
-	}
-	if !strings.Contains(out, "x") {
-		t.Errorf("code text missing in %q", out)
+	d := DefaultTheme()
+	want := "[" + d.InlineCodeFG + ":" + d.InlineCodeBG + ":]x"
+	if !strings.Contains(out, want) {
+		t.Errorf("inline code tag %q missing in %q", want, out)
 	}
 }
 
@@ -116,14 +111,15 @@ func TestRenderLink(t *testing.T) {
 }
 
 func TestRenderTableAlignment(t *testing.T) {
-	src := "| A | B |\n|:--|--:|\n| short | x |\n"
-	out := Render(src, Options{})
-	// Right-aligned column B should left-pad "x" to match header width "B".
-	if !strings.Contains(out, "x") {
-		t.Errorf("cell missing in %q", out)
+	src := "| A | BBB |\n|:--|--:|\n| short | x |\n"
+	out := stripTags(Render(src, Options{TableRowSpacing: CompactTableRows}))
+	// Column B is right-aligned to width 3, so the body cell must be padded
+	// with two leading spaces and the separator must match the column widths.
+	if !strings.Contains(out, "short   x") {
+		t.Errorf("right-aligned body row not padded: %q", out)
 	}
-	if !strings.Contains(out, "─") {
-		t.Errorf("separator missing in %q", out)
+	if !strings.Contains(out, "───── ───") {
+		t.Errorf("separator does not match planned column widths: %q", out)
 	}
 }
 

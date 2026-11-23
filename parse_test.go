@@ -121,9 +121,6 @@ func TestParseUnorderedList(t *testing.T) {
 		if it.Ordered {
 			t.Errorf("item %d ordered", i)
 		}
-		if plain(it.Segments) != "" && !hasSegment(it.Segments, "one") && !hasSegment(it.Segments, "two") && !hasSegment(it.Segments, "three") {
-			// sanity: at least one item carries text
-		}
 	}
 	if plain(lb.Items[0].Segments) != "one" {
 		t.Errorf("item0=%q", plain(lb.Items[0].Segments))

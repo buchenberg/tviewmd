@@ -103,7 +103,6 @@ markdown := "# Title\n\n" +
 
 textView.SetText(tviewmd.Render(markdown, tviewmd.Options{}))
 ```
-```
 
 ### With Custom Theme
 
@@ -193,15 +192,24 @@ rolling your own `strings.Builder`:
 
 ```go
 r := tviewmd.NewRenderer(tviewmd.Options{})
-r.Append(chunk)          // or io.Copy(r, stream)
-text := r.String()       // cheap when nothing new arrived
-r.SetWidth(newWidth)     // re-layout after a terminal resize
-r.SetOptions(opts)       // change theme/spacing without losing source
+r.Append(string(chunk))  // Append takes a string; io.Copy(r, stream) also works
+text := r.String()       // cached until new input or options change
+r.SetWidth(newWidth)     // resize hook: changes only Options.Width
+r.SetOptions(opts)       // replaces all Options; accumulated source is kept
+src := r.Source()        // raw markdown accumulated so far
 if errors.Is(r.Err(), tviewmd.ErrStreamTooLarge) { /* stream was capped */ }
+r.Reset()                // clears source, output and Err; keeps options
 ```
 
-`Options.MaxStreamBytes` caps accumulated source (default 8 MiB, `-1` for
-unlimited) so a runaway stream cannot make every re-render more expensive.
+`SetOptions` and `SetWidth` take effect on the next `String()` call and never
+discard the buffered source. `Err` is sticky until `Reset`. A `Renderer` is safe
+for concurrent use; flush from a `QueueUpdateDraw` callback on the tview event
+loop and assign the result directly (do not queue from inside that callback).
+
+`Options.MaxStreamBytes` caps accumulated source (`DefaultMaxStreamBytes`, 8 MiB,
+when zero; `-1` for unlimited). Input past the cap is dropped, `Err` reports
+`tviewmd.ErrStreamTooLarge`, and the buffered prefix stays renderable. `Render`
+and `RenderTView` ignore this option.
 
 ### Custom Width
 
@@ -209,7 +217,7 @@ Set a custom width for horizontal rules and table sizing:
 
 ```go
 output := tviewmd.Render(markdown, tviewmd.Options{
-    Width: 120, // Default is 80
+    Width: 120, // 0 = 80 for rules, max-content tables; negative unsupported
 })
 ```
 
@@ -250,6 +258,12 @@ for _, block := range blocks {
 output := tviewmd.RenderTView(blocks, tviewmd.Options{})
 ```
 
+Use `PlainText` as above to inspect segment text. When walking parsed blocks,
+remember the AST is a lossy, terminal-oriented view: nested quotes/list items
+live in `Block.Blocks` / `ListItem.Blocks`, images are alt text only (URL
+discarded), raw HTML is literal text, and `AlignDefault` renders like
+`AlignLeft`.
+
 ## API Reference
 
 ### Functions
@@ -259,6 +273,7 @@ output := tviewmd.RenderTView(blocks, tviewmd.Options{})
 | `Render(src string, opts Options) string` | Parse and render markdown to tview tags in one call |
 | `Parse(src string) ([]Block, error)` | Parse markdown into renderer-neutral blocks |
 | `RenderTView(blocks []Block, opts Options) string` | Render parsed blocks to tview tags |
+| `PlainText(segs []Segment) string` | Concatenate segment text without rendering tview tags |
 
 ### Types
 
@@ -266,16 +281,22 @@ output := tviewmd.RenderTView(blocks, tviewmd.Options{})
 
 ```go
 type Options struct {
-    // Width for horizontal rules and the table layout budget (default: 80).
-    // Tables are planned at render time; re-render on resize.
+    // Width for horizontal rules and the table layout budget. 0 means 80 for
+    // rules and max-content tables. Negative values currently behave like 0
+    // (the table branch applies a budget only when Width > 0); they are
+    // unsupported, so pass 0 or a positive width.
     Width int
 
-    // Custom color theme (default: DefaultTheme())
+    // Custom color theme (zero value: DefaultTheme()).
     Theme Theme
 
     // Blank lines between table body rows (default: 1).
     // Use tviewmd.CompactTableRows (-1) for the dense layout with none.
     TableRowSpacing int
+
+    // Caps source accumulated by a Renderer. 0 uses DefaultMaxStreamBytes
+    // (8 MiB); -1 means unlimited. Ignored by Render.
+    MaxStreamBytes int
 }
 ```
 
@@ -321,8 +342,10 @@ func (t Theme) WithDefaults() Theme
 func NoColorTheme() Theme
 ```
 
-A theme with only `Link` set now keeps the default heading/rule/code colors;
-previously any partial theme blanked all unspecified colors.
+A theme with only `Link` set keeps the default heading/rule/code colors;
+defaulting is per field, not per struct. A zero `Theme` still means
+`DefaultTheme()`; use `NoColorTheme()` when you want tview's `default` colors
+(NO_COLOR / monochrome terminals).
 
 #### Block Types
 
@@ -336,6 +359,15 @@ type Block struct {
     Code     CodeBlock  // Code block content (for BlockCodeBlock)
     Items    []ListItem // List items (for BlockList)
     Table    TableData  // Table content (for BlockTable)
+    Blocks   []Block    // Nested block children (blockquotes)
+}
+
+type ListItem struct {
+    Segments []Segment
+    Children []ListItem // legacy flattened nested items
+    Blocks   []Block    // full block children of the item
+    Ordered  bool
+    Index    int        // 1-based ordinal for ordered items
 }
 
 type BlockKind int
@@ -351,16 +383,24 @@ const (
 )
 ```
 
+The AST is intentionally lossy: it is a terminal-oriented view, not goldmark's
+full tree. `Block.Blocks` and `ListItem.Blocks` preserve nested code fences,
+tables, lists, headings and multiple paragraphs inside blockquotes and list
+items; the `Segments` / `Children` fields remain the flattened view used by
+hand-built blocks. Images keep only their alt text (the URL is discarded), raw
+HTML is emitted as literal text, and `AlignDefault` renders like `AlignLeft`.
+
 #### Segment Type
 
 Inline content is represented as styled segments:
 
 ```go
 type Segment struct {
-    Text  string  // The text content
-    Style Style   // Rendering style (bold, italic, etc.)
-    Link  string // URL for links (empty if not a link)
-    Code  bool    // true for inline code spans
+    Text   string // The text content
+    Style  Style  // Rendering style (bold, italic, etc.)
+    Link   string // URL for links (empty if not a link)
+    LinkID int    // distinguishes adjacent links with the same URL
+    Code   bool   // true for inline code spans
 }
 
 type Style struct {
@@ -373,6 +413,9 @@ type Style struct {
     Dim           bool
 }
 ```
+
+`tviewmd.PlainText(segs)` returns the concatenated text of a `[]Segment`
+without emitting any tview tags.
 
 ## Design
 
@@ -488,7 +531,7 @@ Contributions are welcome! Please:
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feat/amazing-feature`)
 3. Add tests for new functionality
-4. Run `make all` to verify everything works
+4. Run `make all` to run the standard checks (test, lint, build)
 5. Commit your changes (`git commit -m 'feat: add amazing feature'`)
 6. Push to the branch (`git push origin feat/amazing-feature`)
 7. Open a Pull Request
@@ -503,7 +546,7 @@ cd tviewmd
 # Install dependencies
 go mod download
 
-# Run all checks
+# Run standard checks (test, lint, build)
 make all
 
 # Or individually:
@@ -530,8 +573,8 @@ The project uses GitHub Actions for continuous integration with the following wo
 # Run all tests with race detector
 go test -v -race ./...
 
-# Run fuzz tests
-go test -fuzz=FuzzParse -fuzztime=60s ./...
+# Run fuzz tests (the -fuzz flag targets one package)
+go test -fuzz=FuzzParse -fuzztime=60s .
 
 # Run with coverage
 go test -coverprofile=coverage.out -covermode=atomic ./...
@@ -541,7 +584,7 @@ go tool cover -func=coverage.out
 ### Using Makefile
 
 ```bash
-# Run all checks (test + lint + build)
+# Standard checks (test + lint + build); coverage and fuzz are separate targets
 make all
 
 # Individual targets
@@ -555,7 +598,8 @@ make clean     # Clean build artifacts
 
 ## Linting
 
-The project uses [golangci-lint](https://golangci-lint.run/) with a comprehensive configuration.
+The project uses [golangci-lint](https://golangci-lint.run/) v2 (v2.15.0 in CI)
+with a v2 configuration (`version: "2"`); v1.x cannot read this config.
 
 ```bash
 # Install linter (if not in CI)

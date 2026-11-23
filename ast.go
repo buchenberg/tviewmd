@@ -43,6 +43,11 @@ type Segment struct {
 	// Link, when non-empty, marks Text as the link label and Link as the URL.
 	Link string
 
+	// LinkID distinguishes separate link instances that share a URL. Without
+	// it, two adjacent links to the same target merge into one run and lose a
+	// decoration. Zero is a valid ID for hand-built Segments.
+	LinkID int
+
 	// Code marks the segment as inline code. Renderers may use a distinct
 	// background/foreground for code spans.
 	Code bool

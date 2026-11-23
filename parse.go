@@ -196,10 +196,14 @@ func convertAligns(as []extast.Alignment) []TextAlign {
 
 // collectInline gathers the inline children of a node into styled Segments,
 // starting from a base Style that parent emphasis may have set.
-func collectInline(n gast.Node, source []byte, base Style) []Segment {
+func collectInline(n gast.Node, source []byte, base Style, ids ...*int) []Segment {
+	counter := new(int)
+	if len(ids) > 0 && ids[0] != nil {
+		counter = ids[0]
+	}
 	var segs []Segment
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		segs = append(segs, inlineNode(c, source, base)...)
+		segs = append(segs, inlineNode(c, source, base, counter)...)
 	}
 	// Sanitize here so every downstream consumer -- painters, width measurement,
 	// table planning -- sees the same text. Sanitizing only at paint time would
@@ -213,7 +217,7 @@ func collectInline(n gast.Node, source []byte, base Style) []Segment {
 
 // inlineNode maps a single inline node to Segments, inheriting and extending
 // the base style for nested emphasis.
-func inlineNode(n gast.Node, source []byte, base Style) []Segment {
+func inlineNode(n gast.Node, source []byte, base Style, ids *int) []Segment {
 	switch v := n.(type) {
 	case *gast.Text:
 		return textSegments(v, source, base)
@@ -228,21 +232,26 @@ func inlineNode(n gast.Node, source []byte, base Style) []Segment {
 		} else {
 			st.Bold = true
 		}
-		return collectInline(n, source, st)
+		return collectInline(n, source, st, ids)
 	case *gast.Link:
-		segs := collectInline(n, source, base)
+		segs := collectInline(n, source, base, ids)
+		id := *ids
+		*ids++
 		for i := range segs {
 			segs[i].Link = string(v.Destination)
+			segs[i].LinkID = id
 		}
 		return segs
 	case *gast.AutoLink:
-		return []Segment{{Text: string(v.Label(source)), Style: base, Link: string(v.URL(source))}}
+		id := *ids
+		*ids++
+		return []Segment{{Text: string(v.Label(source)), Style: base, Link: string(v.URL(source)), LinkID: id}}
 	case *gast.RawHTML:
 		return []Segment{{Text: string(v.Segments.Value(source)), Style: base}}
 	case *extast.Strikethrough:
 		st := base
 		st.Strikethrough = true
-		return collectInline(n, source, st)
+		return collectInline(n, source, st, ids)
 	case *extast.TaskCheckBox:
 		box := "☐ "
 		if v.IsChecked {
@@ -251,7 +260,7 @@ func inlineNode(n gast.Node, source []byte, base Style) []Segment {
 		return []Segment{{Text: box, Style: base}}
 	case *gast.Image:
 		// Terminal rendering can't show images; emit the alt text instead.
-		return collectInline(n, source, base)
+		return collectInline(n, source, base, ids)
 	}
 	return nil
 }

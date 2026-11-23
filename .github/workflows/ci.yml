@@ -13,7 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.24', '1.25']
+        # go.mod requires go 1.25.8; older legs only download a newer toolchain.
+        go-version: ['1.25.x']
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -119,15 +120,17 @@ jobs:
       - name: Run tests
         run: go test -v -race ./...
 
-      - name: Build
+      # The module root is a library (no main package): `go build ./.` writes
+      # an archive, not a runnable binary. Ship the real cmd/preview CLI instead.
+      - name: Build preview CLI
         run: |
           mkdir -p release
-          go build -o release/tviewmd ./.
+          go build -o release/tviewmd-preview ./cmd/preview
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/tviewmd
+          files: release/tviewmd-preview
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

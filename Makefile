@@ -13,6 +13,7 @@ BINARY_NAME=tviewmd
 # Linter
 GOLANGCI_LINT?=golangci-lint
 
+# Standard checks only; coverage and fuzz are deliberately separate targets.
 all: test lint build
 
 test: 
@@ -45,11 +46,11 @@ clean:
 	rm -f coverage.out coverage.txt
 	rm -f $(BINARY_NAME)
 
-# Install linter
+# Install linter. .golangci.yml uses version: "2", which requires golangci-lint v2.
 install-linter:
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell $(GOCMD) env GOPATH)/bin v1.61.0
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell $(GOCMD) env GOPATH)/bin v2.15.0
 
-# Run all checks (test, lint, build)
+# Alias for all: the same test, lint and build checks (no coverage/fuzz)
 check: test lint build
 
 # Help

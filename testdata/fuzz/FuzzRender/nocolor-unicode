@@ -1,0 +1,4 @@
+go test fuzz v1
+string("# Head\n\n**bold link** and 中文 ✍️")
+int(0)
+int(1)

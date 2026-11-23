@@ -10,6 +10,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -22,10 +23,16 @@ import (
 )
 
 func main() {
-	width, filter, err := parseArgs(os.Args[1:])
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run is main's logic with injectable streams and an exit code, so the success
+// and failure paths can be tested without spawning a process.
+func run(args []string, stdout, stderr io.Writer) int {
+	width, filter, err := parseArgs(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "preview: %v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "preview: %v\n", err)
+		return 2
 	}
 
 	shown := 0
@@ -34,15 +41,16 @@ func main() {
 			continue
 		}
 		shown++
-		fmt.Printf("\n=== %s === width %d\n\n", s.name, width)
+		fmt.Fprintf(stdout, "\n=== %s === width %d\n\n", s.name, width)
 		for _, line := range paint(s.src, width, 80) {
-			fmt.Printf("%s\n", line)
+			fmt.Fprintln(stdout, line)
 		}
 	}
 	if shown == 0 {
-		fmt.Fprintf(os.Stderr, "no sample matched %q\n", filter)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "no sample matched %q\n", filter)
+		return 1
 	}
+	return 0
 }
 
 // defaultWidth is the paint width used when no numeric argument is given.

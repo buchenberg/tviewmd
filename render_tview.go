@@ -51,6 +51,11 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	case BlockCodeBlock:
+		// An empty fence carries no visible content; emitting only color tags
+		// produces a styled blank line that looks like a rendering artifact.
+		if blk.Code.Source == "" {
+			break
+		}
 		b.WriteString(renderCode(blk.Code, opts))
 		b.WriteString("\n")
 	case BlockBlockquote:
@@ -875,19 +880,24 @@ func renderSegments(segs []Segment, opts Options, ambient string) string {
 		// A link's decoration belongs after the label's last visible text, not
 		// after each treatment group: "[**do**cs](u)" is one link split into
 		// "do" and "cs", and must paint "docs (u)", once.
-		if link := segs[i].Link; link != "" && (j+1 == len(segs) || segs[j+1].Link != link) {
+		if link := segs[i].Link; link != "" && (j+1 == len(segs) || segs[j+1].Link != link || segs[j+1].LinkID != segs[i].LinkID) {
 			if raw := segmentsText(segs[runStart : j+1]); raw != "" && raw != link {
 				b.WriteString(linkDecoration(link, opts))
 				b.WriteString(ambient)
 			}
 		}
-		if next := j + 1; next < len(segs) && segs[next].Link != segs[j].Link {
+		if next := j + 1; next < len(segs) && (segs[next].Link != segs[j].Link || segs[next].LinkID != segs[j].LinkID) {
 			runStart = next
 		}
 		i = j + 1
 	}
 	return b.String()
 }
+
+// PlainText concatenates the visible text of segs without styling, escaping,
+// or decorations. It is the counterpart to Parse for callers that want the
+// document text, not tview tags.
+func PlainText(segs []Segment) string { return segmentsText(segs) }
 
 // segmentsText concatenates the visible text of segs.
 func segmentsText(segs []Segment) string {
@@ -919,7 +929,7 @@ func linkRunEnd(segs []Segment, i int) int {
 		return i
 	}
 	j := i
-	for j+1 < len(segs) && segs[j+1].Link == segs[i].Link {
+	for j+1 < len(segs) && segs[j+1].Link == segs[i].Link && segs[j+1].LinkID == segs[i].LinkID {
 		j++
 	}
 	return j
@@ -928,7 +938,7 @@ func linkRunEnd(segs []Segment, i int) int {
 // sameSegmentTreatment reports whether two segments render identically, so they
 // can be merged for escaping purposes.
 func sameSegmentTreatment(a, b Segment) bool {
-	return a.Link == b.Link && a.Code == b.Code && a.Style == b.Style
+	return a.Link == b.Link && a.LinkID == b.LinkID && a.Code == b.Code && a.Style == b.Style
 }
 
 // renderSegmentGroup renders a run of same-styled segments. The visible text is
@@ -957,13 +967,13 @@ func renderStyledRun(s0 Segment, plain bool, raw string, opts Options, ambient s
 	text := tview.Escape(sanitizeText(raw))
 	switch {
 	case s0.Link != "":
-		flags := "u"
+		flags := treatmentFlags(s0, "u")
 		if plain {
-			flags = ""
+			flags = treatmentFlags(s0, "")
 		}
 		return tag(linkColor(opts), "", flags) + text + closeTag() + ambient
 	case s0.Code:
-		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, "") + text + closeTag() + ambient
+		return tag(opts.Theme.InlineCodeFG, opts.Theme.InlineCodeBG, treatmentFlags(s0, "")) + text + closeTag() + ambient
 	case s0.Style == (Style{}):
 		return text
 	default:
@@ -985,6 +995,20 @@ func tag(fg, bg, flags string) string {
 // every cell rendered afterwards. [::U] maps to tcell's Underline(false), which
 // is the only tag that clears ulStyle back to UnderlineStyleNone.
 func closeTag() string { return "[-:-:-][::U]" }
+
+// treatmentFlags merges a treatment's base flags (link underline) with any
+// style flags the segment carries, dropping duplicates. Without it, emphasis
+// inside a link or code span is parsed but discarded at paint time.
+func treatmentFlags(s Segment, base string) string {
+	var f strings.Builder
+	f.WriteString(base)
+	for _, c := range flagsOf(s.Style) {
+		if !strings.ContainsRune(base, c) {
+			f.WriteRune(c)
+		}
+	}
+	return f.String()
+}
 
 func flagsOf(s Style) string {
 	var f strings.Builder

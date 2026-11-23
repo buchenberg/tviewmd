@@ -1,6 +1,10 @@
 package tviewmd
 
-import "github.com/rivo/tview"
+import (
+	"strings"
+
+	"github.com/rivo/tview"
+)
 
 // Theme holds the color scheme used by renderers. Colors are expressed in any
 // form the target backend understands (tview accepts named colors like "red",
@@ -141,4 +145,21 @@ func Render(src string, opts Options) string {
 		return ""
 	}
 	return RenderTView(blocks, opts)
+}
+
+// RenderLines renders src and returns its planned physical lines, including
+// the blank spacer lines between table rows. It is a convenience for consumers
+// that need a row count (for example a TUI anchoring a prompt below a message)
+// without re-wrapping the already-planned output.
+//
+// With a positive Options.Width, tables are planned to fit that budget, so the
+// returned lines are the rows a TextView at that width paints. With Width 0 the
+// TextView may wrap further; callers that need an exact painted count must set
+// Width or use a SimulationScreen.
+func RenderLines(src string, opts Options) []string {
+	out := Render(src, opts)
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
 }

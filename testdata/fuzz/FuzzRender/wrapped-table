@@ -1,0 +1,4 @@
+go test fuzz v1
+string("| Feature | Status |\n|---|---|\n| a long description that wraps | blocked |\n| short | landed |")
+int(34)
+int(1)
