@@ -13,6 +13,9 @@ import (
 // tview.TextView configured with SetWrap(true). The output contains tview
 // color tags ([fg:bg:flags] ... [-:-:-]); the TextView performs word-wrapping.
 func RenderTView(blocks []Block, opts Options) string {
+	// Sanitize at the render boundary so measurement and painting use the
+	// same text, even when callers build Blocks by hand.
+	blocks = sanitizeBlocks(blocks)
 	// Per-field defaulting: a partial theme keeps its explicit colors instead
 	// of blanking every field the caller did not set.
 	opts.Theme = opts.Theme.WithDefaults()
@@ -59,28 +62,9 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		b.WriteString(renderCode(blk.Code, opts))
 		b.WriteString("\n")
 	case BlockBlockquote:
-		ambient := tag(opts.Theme.QuoteFG, "", "i")
-		if len(blk.Blocks) > 0 {
-			// Every child block keeps its own kind (code, list, table,
-			// heading), each line carrying the quote bar. Paragraph children
-			// receive the quote ambient so their style resumes after links.
-			for _, line := range renderNestedLines(blk.Blocks, opts, width, depth, ambient) {
-				b.WriteString(ambient)
-				b.WriteString("▎ ")
-				b.WriteString(line)
-				b.WriteString(closeTag())
-				b.WriteString("\n")
-			}
-			break
-		}
-		// Legacy flattened view for hand-built Blocks without Blocks set.
-		b.WriteString(ambient)
-		b.WriteString("▎ ")
-		b.WriteString(renderSegments(blk.Segments, opts, ambient))
-		b.WriteString(closeTag())
-		b.WriteString("\n")
+		renderBlockquote(b, blk, opts, width, depth)
 	case BlockList:
-		renderList(b, blk.Items, opts, width, depth)
+		renderList(b, blk.Items, opts, width, depth, "")
 	case BlockTable:
 		renderTable(b, blk.Table, opts)
 	}
@@ -91,14 +75,18 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 func renderNestedLines(blocks []Block, opts Options, width, depth int, ambient string) []string {
 	var tmp strings.Builder
 	for _, child := range blocks {
-		if child.Kind == BlockParagraph {
+		switch child.Kind {
+		case BlockParagraph:
 			// A paragraph nested in a quote must resume the quote style after
 			// each inner tag reset; the generic block painter uses no ambient.
 			tmp.WriteString(renderSegments(child.Segments, opts, ambient))
 			tmp.WriteString("\n")
-			continue
+		case BlockList:
+			// Lists inside quotes carry the same ambient into their items.
+			renderList(&tmp, child.Items, opts, width, depth, ambient)
+		default:
+			renderBlock(&tmp, child, opts, width, depth)
 		}
-		renderBlock(&tmp, child, opts, width, depth)
 	}
 	s := strings.TrimRight(tmp.String(), "\n")
 	if s == "" {
@@ -107,14 +95,14 @@ func renderNestedLines(blocks []Block, opts Options, width, depth int, ambient s
 	return strings.Split(s, "\n")
 }
 
-func renderList(b *strings.Builder, items []ListItem, opts Options, width, depth int) {
+func renderList(b *strings.Builder, items []ListItem, opts Options, width, depth int, ambient string) {
 	indent := strings.Repeat("  ", depth)
 	for _, it := range items {
 		marker := "• "
 		if it.Ordered {
 			marker = fmt.Sprintf("%d. ", it.Index)
 		}
-		if lines := renderNestedLines(it.Blocks, opts, width, depth+1, ""); len(lines) > 0 {
+		if lines := renderNestedLines(it.Blocks, opts, width, depth, ambient); len(lines) > 0 {
 			// The item's first block follows the marker; later blocks and
 			// wrapped continuation lines are indented under it.
 			b.WriteString(indent)
@@ -136,12 +124,43 @@ func renderList(b *strings.Builder, items []ListItem, opts Options, width, depth
 		// Legacy inline view: segments plus nested ListItems.
 		b.WriteString(indent)
 		b.WriteString(marker)
-		b.WriteString(renderSegments(it.Segments, opts, ""))
+		b.WriteString(renderSegments(it.Segments, opts, ambient))
 		b.WriteString("\n")
 		if len(it.Children) > 0 {
-			renderList(b, it.Children, opts, width, depth+1)
+			renderList(b, it.Children, opts, width, depth+1, ambient)
 		}
 	}
+}
+
+// renderBlockquote paints a quoted block, preferring the full block children
+// and falling back to the flattened inline view for hand-built Blocks.
+func renderBlockquote(b *strings.Builder, blk Block, opts Options, width, depth int) {
+	ambient := tag(opts.Theme.QuoteFG, "", "i")
+	if len(blk.Blocks) > 0 {
+		// Every child block keeps its own kind (code, list, table,
+		// heading), each line carrying the quote bar. Paragraph children
+		// receive the quote ambient so their style resumes after links.
+		lines := renderNestedLines(blk.Blocks, opts, width, depth, ambient)
+		if len(lines) == 0 {
+			// A quote whose only child emits nothing (e.g. an empty fence)
+			// still paints its quote bar, as it did before nested blocks.
+			lines = []string{""}
+		}
+		for _, line := range lines {
+			b.WriteString(ambient)
+			b.WriteString("▎ ")
+			b.WriteString(line)
+			b.WriteString(closeTag())
+			b.WriteString("\n")
+		}
+		return
+	}
+	// Legacy flattened view for hand-built Blocks without Blocks set.
+	b.WriteString(ambient)
+	b.WriteString("▎ ")
+	b.WriteString(renderSegments(blk.Segments, opts, ambient))
+	b.WriteString(closeTag())
+	b.WriteString("\n")
 }
 
 func renderCode(cb CodeBlock, opts Options) string {
@@ -174,6 +193,8 @@ func tableBlankLines(opts Options) int {
 // renderTable paints a table: the bold header row, the separator, then the
 // body. Column widths come from the max-content plan or, when Options.Width
 // constrains it, from the wrapped layout below.
+//
+//nolint:gocognit // table planning and the unwrapped/wrapped split are independent branches
 func renderTable(b *strings.Builder, t TableData, opts Options) {
 	widths := maxContentWidths(t)
 	cols := len(widths)
@@ -878,6 +899,8 @@ func cellPaintedWidth(c TableCell) int {
 // after the run's last group: a label with inline styling is several treatment
 // groups but still one link. The ambient block style is resumed after the
 // decoration, whose own closeTag would otherwise reset it.
+//
+//nolint:gocognit // link-run grouping and decoration are deliberately one pass
 func renderSegments(segs []Segment, opts Options, ambient string) string {
 	var b strings.Builder
 	runStart := 0
@@ -890,7 +913,10 @@ func renderSegments(segs []Segment, opts Options, ambient string) string {
 		// A link's decoration belongs after the label's last visible text, not
 		// after each treatment group: "[**do**cs](u)" is one link split into
 		// "do" and "cs", and must paint "docs (u)", once.
-		if link := segs[i].Link; link != "" && (j+1 == len(segs) || segs[j+1].Link != link || segs[j+1].LinkID != segs[i].LinkID) {
+		link := segs[i].Link
+		linkEnds := j+1 == len(segs) || segs[j+1].Link != link ||
+			segs[j+1].LinkID != segs[i].LinkID
+		if link != "" && linkEnds {
 			if raw := segmentsText(segs[runStart : j+1]); raw != "" && raw != link {
 				b.WriteString(linkDecoration(link, opts))
 				b.WriteString(ambient)
@@ -999,7 +1025,21 @@ func renderStyledRun(s0 Segment, plain bool, raw string, opts Options, ambient s
 // current style. All three fields are always present with colon separators
 // so closeTag() reliably resets the same channels across all tags.
 func tag(fg, bg, flags string) string {
-	return fmt.Sprintf("[%s:%s:%s]", fg, bg, flags)
+	return fmt.Sprintf("[%s:%s:%s]", tagValue(fg), tagValue(bg), tagValue(flags))
+}
+
+// tagValue keeps only characters that can appear in a tview color name or
+// flag. A caller-supplied Theme must not be able to inject an extra tag by
+// putting brackets or colons in a color field.
+func tagValue(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '#' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // closeTag resets all style attributes including flags (bold/underline/italic)

@@ -55,10 +55,13 @@ func parseBlock(n gast.Node, source []byte) []Block {
 		code := CodeBlock{Source: sanitizeText(string(v.Lines().Value(source)))}
 		return []Block{{Kind: BlockCodeBlock, Code: code}}
 	case *gast.Blockquote:
+		// Parse each child exactly once. Deriving the legacy flattened view
+		// from the same result avoids exponential work on nested quotes.
+		children := parseChildren(v, source)
 		return []Block{{
 			Kind:     BlockBlockquote,
-			Segments: collectBlockquote(v, source), // legacy flattened view
-			Blocks:   parseChildren(v, source),     // full nested structure
+			Segments: flattenBlockSegments(children),
+			Blocks:   children,
 		}}
 	case *gast.List:
 		return []Block{{Kind: BlockList, Items: parseList(v, source)}}
@@ -90,27 +93,27 @@ func parseChildren(n gast.Node, source []byte) []Block {
 	return blocks
 }
 
-// collectBlockquote flattens a blockquote's block children into inline segments,
-// inserting a newline between distinct paragraphs.
-func collectBlockquote(bq *gast.Blockquote, source []byte) []Segment {
+// flattenBlockSegments builds the legacy inline view from already-parsed
+// children, inserting a newline between distinct blocks with content.
+func flattenBlockSegments(blocks []Block) []Segment {
 	var segs []Segment
 	first := true
-	for c := bq.FirstChild(); c != nil; c = c.NextSibling() {
-		for _, blk := range parseBlock(c, source) {
-			if len(blk.Segments) == 0 {
-				continue
-			}
-			if !first {
-				segs = append(segs, Segment{Text: "\n"})
-			}
-			segs = append(segs, blk.Segments...)
-			first = false
+	for _, blk := range blocks {
+		if len(blk.Segments) == 0 {
+			continue
 		}
+		if !first {
+			segs = append(segs, Segment{Text: "\n"})
+		}
+		segs = append(segs, blk.Segments...)
+		first = false
 	}
 	return segs
 }
 
 // parseList maps a goldmark List into ListItems, recursing into nested lists.
+//
+//nolint:gocognit // one pass over the item children builds both block and inline views
 func parseList(list *gast.List, source []byte) []ListItem {
 	items := make([]ListItem, 0)
 	idx := 1
@@ -118,17 +121,22 @@ func parseList(list *gast.List, source []byte) []ListItem {
 		idx = list.Start
 	}
 	for li := list.FirstChild(); li != nil; li = li.NextSibling() {
-		item := ListItem{Ordered: list.IsOrdered(), Index: idx, Blocks: parseChildren(li, source)}
-		for c := li.FirstChild(); c != nil; c = c.NextSibling() {
-			if sub, ok := c.(*gast.List); ok {
-				item.Children = append(item.Children, parseList(sub, source)...)
+		// Parse the item's children once; the legacy flatten view is derived
+		// from that result instead of a second recursive walk.
+		children := parseChildren(li, source)
+		item := ListItem{Ordered: list.IsOrdered(), Index: idx, Blocks: children}
+		for _, child := range children {
+			if child.Kind == BlockList {
+				item.Children = append(item.Children, child.Items...)
 				continue
 			}
-			segs := collectInline(c, source, Style{})
-			if len(item.Segments) > 0 && len(segs) > 0 {
+			if len(child.Segments) == 0 {
+				continue
+			}
+			if len(item.Segments) > 0 {
 				item.Segments = append(item.Segments, Segment{Text: " "})
 			}
-			item.Segments = append(item.Segments, segs...)
+			item.Segments = append(item.Segments, child.Segments...)
 		}
 		if item.Ordered {
 			idx++

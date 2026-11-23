@@ -69,7 +69,15 @@ func paintedTagsConsumed(s string, width int) bool {
 	if width > 200 {
 		width = 200
 	}
-	const height = 40
+	// Size the screen to the document: a fixed height hides leaks in long
+	// documents that paint beyond the last visible row.
+	height := strings.Count(s, "\n") + 3
+	if height < 40 {
+		height = 40
+	}
+	if height > 500 {
+		height = 500
+	}
 	tv := tview.NewTextView().SetDynamicColors(true).SetWrap(true)
 	tv.SetText(s)
 	tv.SetRect(0, 0, width, height)
@@ -102,7 +110,9 @@ func paintedTagsConsumed(s string, width int) bool {
 		}
 		// A bracket span containing ':' is a tview tag. If it survived
 		// painting, the caller will see it literally.
-		if j < len(text) && text[j] == ']' && strings.Contains(text[i:j], ":") {
+		// A real tview tag has exactly two colon separators; a literal
+		// '[a:b]' painted from escaped user text has only one and is fine.
+		if j < len(text) && text[j] == ']' && strings.Count(text[i:j], ":") == 2 {
 			return false
 		}
 	}

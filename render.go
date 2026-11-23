@@ -70,17 +70,23 @@ func (t Theme) WithDefaults() Theme {
 // default color everywhere. It is the hook for NO_COLOR environments and
 // monochrome terminals, which cannot be expressed with the zero Theme (that
 // value means "use DefaultTheme").
+// inheritColor is tview's name for the terminal's default color.
+const inheritColor = "default"
+
+// NoColorTheme returns a theme that asks tview to inherit the terminal's
+// default color everywhere. It is the hook for NO_COLOR environments and
+// monochrome terminals, which cannot be expressed with the zero Theme.
 func NoColorTheme() Theme {
 	t := Theme{
-		Link:         "default",
-		InlineCodeFG: "default",
-		InlineCodeBG: "default",
-		CodeBlockFG:  "default",
-		QuoteFG:      "default",
-		Hr:           "default",
+		Link:         inheritColor,
+		InlineCodeFG: inheritColor,
+		InlineCodeBG: inheritColor,
+		CodeBlockFG:  inheritColor,
+		QuoteFG:      inheritColor,
+		Hr:           inheritColor,
 	}
 	for i := range t.Heading {
-		t.Heading[i] = "default"
+		t.Heading[i] = inheritColor
 	}
 	return t
 }

@@ -3,6 +3,8 @@ package tviewmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/rivo/uniseg"
 )
 
 func TestNegativeWidthIsDocumentedBehavior(t *testing.T) {
@@ -127,9 +129,45 @@ func TestRenderLinesIncludesTableSpacers(t *testing.T) {
 }
 
 func TestWrappedAdjacentSameURLLinks(t *testing.T) {
-	src := "| Cell |\n|---|\n| [a](u)[b](u) |\n"
-	out := stripTags(Render(src, Options{Width: 12}))
+	// Two columns at Width 14 force solveColumnWidths to reflow the table,
+	// so this exercises cellTokens rather than the unwrapped renderSegments.
+	src := "| A | B |\n|---|---|\n| [a](u)[c](u) | [b](v) |\n"
+	out := stripTags(Render(src, Options{Width: 14}))
 	if got := strings.Count(out, "(u)"); got != 2 {
-		t.Errorf("wrapped path painted %d decorations, want 2: %q", got, out)
+		t.Errorf("wrapped path painted %d '(u)' decorations, want 2: %q", got, out)
+	}
+	if got := strings.Count(out, "(v)"); got != 1 {
+		t.Errorf("wrapped path painted %d '(v)' decorations, want 1: %q", got, out)
+	}
+}
+
+func TestThemeColorCannotInjectTag(t *testing.T) {
+	out := Render("[l](u)", Options{Theme: Theme{Link: "[evil:tag]"}})
+	if !paintedTagsConsumed(out, 80) {
+		t.Errorf("theme color injected a tag: %q", out)
+	}
+	if got := stripTags(out); strings.Contains(got, "evil") {
+		t.Errorf("injected theme value painted as text: %q", got)
+	}
+}
+
+func TestHandBuiltTableMeasurementMatchesPaint(t *testing.T) {
+	blocks := []Block{{Kind: BlockTable, Table: TableData{
+		Header: []TableCell{{Segments: []Segment{{Text: "A"}}}, {Segments: []Segment{{Text: "B"}}}},
+		Rows: [][]TableCell{
+			{{Segments: []Segment{{Text: "x\x1b[31my"}}}, {Segments: []Segment{{Text: "hello"}}}},
+		},
+	}}}
+	for _, width := range []int{0, 20} {
+		lines := strings.Split(stripTags(RenderTView(blocks, Options{Width: width})), "\n")
+		if len(lines) < 3 {
+			t.Fatalf("width %d: table painted too few lines: %q", width, lines)
+		}
+		want := uniseg.StringWidth(lines[0])
+		for i, line := range lines[1:] {
+			if got := uniseg.StringWidth(line); got != want {
+				t.Errorf("width %d row %d is %d cells, header is %d: %q", width, i+1, got, want, lines)
+			}
+		}
 	}
 }

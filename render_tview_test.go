@@ -917,3 +917,20 @@ func TestRenderMultiParagraphBlockquoteKeepsStyleAfterLink(t *testing.T) {
 		t.Errorf("nested quote style not resumed after link\n got=%#v\nwant=%#v", got, baseline)
 	}
 }
+
+// TestRenderQuoteListKeepsStyleAfterLink: a list nested in a blockquote must
+// resume the quote style after an inline link, like a direct quote paragraph.
+func TestRenderQuoteListKeepsStyleAfterLink(t *testing.T) {
+	baseline, ok := cellStyleForSize(t, Render("> QQQ", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	got, ok := cellStyleForSize(t, Render("> - item [link](u) QQQ\n", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing trailing sentinel after link in quoted list")
+	}
+	requireAttr(t, "quoted list baseline", baseline, tcell.AttrItalic)
+	if got != baseline {
+		t.Errorf("quoted list style not resumed after link\n got=%#v\nwant=%#v", got, baseline)
+	}
+}

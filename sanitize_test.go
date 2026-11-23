@@ -10,6 +10,8 @@ func TestSanitizeText(t *testing.T) {
 		{"clean", "hello world", "hello world"},
 		{"unicode", "héllo ✍️", "héllo ✍️"},
 		{"newlines and tabs", "a\nb\tc", "a\nb\tc"},
+		{"bare CR", "a\rb", "a\nb"},
+		{"CRLF", "a\r\nb", "a\nb"},
 		{"simple CSI", "a\x1b[31mb\x1b[0mc", "abc"},
 		{"other CSI", "a\x1b[2Jb", "ab"},
 		{"OSC with BEL", "a\x1b]0;title\x07b", "ab"},
@@ -77,5 +79,11 @@ func TestSanitizeIncompleteSequences(t *testing.T) {
 		if got := sanitizeText(tc.in); got != tc.want {
 			t.Errorf("sanitizeText(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestRenderBareCRIsALineBreak(t *testing.T) {
+	if got := stripTags(Render("a\rb", Options{})); got != "a b" {
+		t.Errorf("bare CR did not become a soft break: %q", got)
 	}
 }

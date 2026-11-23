@@ -15,6 +15,8 @@ import (
 // tview.Escape only neutralizes bracketed color tags; it does not sanitize
 // control characters. Since tviewmd's main consumer renders LLM output, text
 // reaching the terminal must not be able to issue SGR or other escape codes.
+//
+//nolint:funlen,gocognit,gocyclo // an explicit byte-state machine; splitting it would obscure the CSI/OSC handling
 func sanitizeText(s string) string {
 	var b strings.Builder
 	changed := false
@@ -26,6 +28,20 @@ func sanitizeText(s string) string {
 				b.WriteByte(c)
 			}
 			i++
+		case c == '\r':
+			// CommonMark treats a bare CR as a line ending. Deleting it would
+			// silently join two lines; normalize to LF (CRLF stays one LF).
+			if !changed {
+				b.Grow(len(s))
+				b.WriteString(s[:i])
+				changed = true
+			}
+			if i+1 < len(s) && s[i+1] == '\n' {
+				i++ // skip CR; the following LF becomes the line break
+			} else {
+				b.WriteByte('\n')
+				i++
+			}
 		case c >= 0x20 && c != 0x7f:
 			if c < 0x80 {
 				if changed {
@@ -101,4 +117,63 @@ func sanitizeText(s string) string {
 		return s
 	}
 	return b.String()
+}
+
+// sanitizeBlocks returns a copy of blocks with every untrusted string
+// sanitized. RenderTView calls this once so width planning and painting see
+// identical text, including for Blocks constructed directly by callers.
+func sanitizeBlocks(blocks []Block) []Block {
+	out := make([]Block, len(blocks))
+	for i, b := range blocks {
+		out[i] = b
+		out[i].Segments = sanitizeSegments(b.Segments)
+		out[i].Code.Source = sanitizeText(b.Code.Source)
+		out[i].Items = sanitizeItems(b.Items)
+		out[i].Table = sanitizeTable(b.Table)
+		out[i].Blocks = sanitizeBlocks(b.Blocks)
+	}
+	return out
+}
+
+func sanitizeSegments(segs []Segment) []Segment {
+	if segs == nil {
+		return nil
+	}
+	out := make([]Segment, len(segs))
+	copy(out, segs)
+	for i := range out {
+		out[i].Text = sanitizeText(out[i].Text)
+		out[i].Link = sanitizeText(out[i].Link)
+	}
+	return out
+}
+
+func sanitizeItems(items []ListItem) []ListItem {
+	if items == nil {
+		return nil
+	}
+	out := make([]ListItem, len(items))
+	copy(out, items)
+	for i := range out {
+		out[i].Segments = sanitizeSegments(items[i].Segments)
+		out[i].Children = sanitizeItems(items[i].Children)
+		out[i].Blocks = sanitizeBlocks(items[i].Blocks)
+	}
+	return out
+}
+
+func sanitizeTable(t TableData) TableData {
+	out := TableData{Aligns: t.Aligns}
+	out.Header = make([]TableCell, len(t.Header))
+	for i, c := range t.Header {
+		out.Header[i] = TableCell{Segments: sanitizeSegments(c.Segments), Align: c.Align}
+	}
+	out.Rows = make([][]TableCell, len(t.Rows))
+	for i, row := range t.Rows {
+		out.Rows[i] = make([]TableCell, len(row))
+		for j, c := range row {
+			out.Rows[i][j] = TableCell{Segments: sanitizeSegments(c.Segments), Align: c.Align}
+		}
+	}
+	return out
 }

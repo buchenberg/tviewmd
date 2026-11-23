@@ -25,7 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Sanitize ESC/CSI/OSC and C0/C1 control characters at parse and paint time so streamed text cannot inject tview tags or terminal escapes.
 - Preserve emphasis on links and inline code spans instead of dropping it.
-- Adjacent links sharing a URL keep separate decorations (`Segment.LinkID`).
+- Adjacent links sharing a URL keep separate decorations (`Segment.LinkID`), in both the unwrapped and wrapped table paths.
+- Parsing nested blockquotes/list items is linear again; parsing both the flattened and block views of the same children had made it exponential (a few dozen nesting levels could hang a render).
+- Quoted lists resume the quote style after inline links, matching direct quote paragraphs.
+- Hand-built `Block` tables measure exactly what they paint; untrusted strings are sanitized once at the render boundary.
+- A bare `CR` is normalized to a line break instead of being deleted, so CR-only input no longer joins lines.
+- Color values from a caller-supplied `Theme` can no longer inject tview tags.
 - Empty fenced code blocks no longer emit tag-only blank output.
 - Documentation and CI consistency: golangci-lint v2 config, install script and CI aligned; the CI Go matrix now matches `go.mod`; releases no longer attach a fake binary built from the library root.
 

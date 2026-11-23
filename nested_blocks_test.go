@@ -47,3 +47,22 @@ func TestParseKeepsNestedBlockKinds(t *testing.T) {
 		t.Errorf("list item lost its nested blocks: %+v", blocks[1])
 	}
 }
+
+// TestNestedListIndentExact pins the layout that regressed when list items
+// began rendering their full Blocks: each nesting level is exactly two cells.
+func TestNestedListIndentExact(t *testing.T) {
+	got := stripTags(Render("- parent\n  - child\n    - grandchild\n", Options{TableRowSpacing: CompactTableRows}))
+	want := "• parent\n  • child\n    • grandchild"
+	if got != want {
+		t.Errorf("nested list indent =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestQuoteWithOnlyEmptyFenceKeepsBar: suppressing tag-only fence output must
+// not suppress a blockquote's visible quote bar.
+func TestQuoteWithOnlyEmptyFenceKeepsBar(t *testing.T) {
+	got := stripTags(Render("> ```\n> ```\n", Options{}))
+	if !strings.Contains(got, "▎") {
+		t.Errorf("empty-fence quote lost its bar: %q", got)
+	}
+}

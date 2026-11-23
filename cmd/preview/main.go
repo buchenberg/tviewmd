@@ -31,7 +31,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	width, filter, err := parseArgs(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "preview: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "preview: %v\n", err)
 		return 2
 	}
 
@@ -41,13 +41,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			continue
 		}
 		shown++
-		fmt.Fprintf(stdout, "\n=== %s === width %d\n\n", s.name, width)
+		_, _ = fmt.Fprintf(stdout, "\n=== %s === width %d\n\n", s.name, width)
 		for _, line := range paint(s.src, width, 80) {
-			fmt.Fprintln(stdout, line)
+			_, _ = fmt.Fprintln(stdout, line)
 		}
 	}
 	if shown == 0 {
-		fmt.Fprintf(stderr, "no sample matched %q\n", filter)
+		_, _ = fmt.Fprintf(stderr, "no sample matched %q\n", filter)
 		return 1
 	}
 	return 0
