@@ -31,6 +31,56 @@ func DefaultTheme() Theme {
 	}
 }
 
+// WithDefaults fills each empty color field of t from DefaultTheme, leaving
+// explicitly set fields untouched. Defaulting is per field, not per struct: a
+// theme that changes only Link keeps the default heading, code and rule colors.
+func (t Theme) WithDefaults() Theme {
+	d := DefaultTheme()
+	for i := range t.Heading {
+		if t.Heading[i] == "" {
+			t.Heading[i] = d.Heading[i]
+		}
+	}
+	if t.Link == "" {
+		t.Link = d.Link
+	}
+	if t.InlineCodeFG == "" {
+		t.InlineCodeFG = d.InlineCodeFG
+	}
+	if t.InlineCodeBG == "" {
+		t.InlineCodeBG = d.InlineCodeBG
+	}
+	if t.CodeBlockFG == "" {
+		t.CodeBlockFG = d.CodeBlockFG
+	}
+	if t.QuoteFG == "" {
+		t.QuoteFG = d.QuoteFG
+	}
+	if t.Hr == "" {
+		t.Hr = d.Hr
+	}
+	return t
+}
+
+// NoColorTheme returns a theme that asks tview to inherit the terminal's
+// default color everywhere. It is the hook for NO_COLOR environments and
+// monochrome terminals, which cannot be expressed with the zero Theme (that
+// value means "use DefaultTheme").
+func NoColorTheme() Theme {
+	t := Theme{
+		Link:         "default",
+		InlineCodeFG: "default",
+		InlineCodeBG: "default",
+		CodeBlockFG:  "default",
+		QuoteFG:      "default",
+		Hr:           "default",
+	}
+	for i := range t.Heading {
+		t.Heading[i] = "default"
+	}
+	return t
+}
+
 // Options configure rendering. The zero value renders with the default theme
 // and an 80-column width for rules; tables use max-content column widths
 // unless Width constrains them.
@@ -55,11 +105,23 @@ type Options struct {
 	// between logical rows only -- never after the last row, so Render's
 	// trailing-newline trimming is unaffected.
 	TableRowSpacing int
+
+	// MaxStreamBytes bounds how much raw source a Renderer accumulates.
+	// Zero uses DefaultMaxStreamBytes (8 MiB); -1 means unlimited. Render and
+	// RenderBytes ignore it -- it exists to stop a runaway token stream from
+	// growing the buffer and making every String() re-render ever more
+	// expensive.
+	MaxStreamBytes int
 }
 
 // CompactTableRows disables blank lines between table rows. Pass it as
 // Options.TableRowSpacing to get the pre-spacing, dense table layout.
 const CompactTableRows = -1
+
+// DefaultMaxStreamBytes is the stream cap used when Options.MaxStreamBytes is
+// zero. It is deliberately generous: a runaway-stream guard, not a normal
+// response limit.
+const DefaultMaxStreamBytes = 8 << 20
 
 // Render parses src and renders it to tview color-tagged text. It is the
 // convenience entry point for callers that do not need the intermediate []Block.

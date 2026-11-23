@@ -31,6 +31,10 @@ Use **buffer + throttled re-render** pattern:
 
 ```go
 func renderLLMStream(stream <-chan []byte, tv *tview.TextView) {
+    // tview disables dynamic colors by default; without this the emitted tags
+    // render as literal text.
+    tv.SetWrap(true).SetDynamicColors(true)
+
     var buf strings.Builder
     throttle := time.Tick(50 * time.Millisecond)
 

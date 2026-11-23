@@ -64,8 +64,12 @@ const (
 
 // ListItem is one entry in a List block.
 type ListItem struct {
+	// Segments is the flattened inline view of the item, retained for callers
+	// that build Blocks by hand. Parsed items prefer Blocks, which preserves
+	// code fences, tables, blockquotes and multiple paragraphs.
 	Segments []Segment
-	Children []ListItem // nested list items
+	Children []ListItem // nested list items, legacy inline view
+	Blocks   []Block    // full block children of the item
 	Ordered  bool
 	// Index is the 1-based ordinal for ordered items.
 	Index int
@@ -100,4 +104,8 @@ type Block struct {
 	Code     CodeBlock  // BlockCodeBlock only
 	Items    []ListItem // BlockList only
 	Table    TableData  // BlockTable only
+	// Blocks holds nested block children for BlockBlockquote. The renderer
+	// prefers it over the flattened Segments view when present, so lists,
+	// code fences, tables and headings inside a quote are no longer dropped.
+	Blocks []Block
 }

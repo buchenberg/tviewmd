@@ -14,7 +14,9 @@ model, then emits **tview color tags** directly.
 tview apps today render markdown via `glamour`, which produces ANSI that must be
 re-parsed into tview tags with `tview.TranslateANSI`. That hop is lossy, wasteful,
 and glamour's block backgrounds clash with tview widgets. `tviewmd` emits tview
-tags natively so a `TextView.SetWrap(true)` just works.
+tags natively, so a `TextView` with `SetWrap(true)` **and**
+`SetDynamicColors(true)` just works — tview disables dynamic colors by default,
+so without the second call the tags render as literal text.
 
 ## Installation
 
@@ -42,7 +44,7 @@ import (
 
 func main() {
     app := tview.NewApplication()
-    tv := tview.NewTextView().SetWrap(true)
+    tv := tview.NewTextView().SetWrap(true).SetDynamicColors(true)
     fmt.Fprint(tv, tviewmd.Render("# Hello\n\nSome **bold** and `code`.", tviewmd.Options{}))
     if err := app.SetRoot(tv, true).Run(); err != nil {
         panic(err)
@@ -63,7 +65,7 @@ import "github.com/buchenberg/tviewmd"
 output := tviewmd.Render("# Heading\n\nParagraph text.", tviewmd.Options{})
 
 // Render to a TextView
-textView := tview.NewTextView().SetWrap(true)
+textView := tview.NewTextView().SetWrap(true).SetDynamicColors(true)
 textView.SetText(output)
 ```
 
@@ -155,7 +157,7 @@ func renderLLMStream(app *tview.Application, stream <-chan []byte, textView *tvi
 // Usage with a mock stream
 func demoStreaming() {
     app := tview.NewApplication()
-    textView := tview.NewTextView().SetWrap(true)
+    textView := tview.NewTextView().SetWrap(true).SetDynamicColors(true)
     
     // Simulate streaming
     stream := make(chan []byte)
@@ -186,7 +188,20 @@ func demoStreaming() {
 }
 ```
 
-### Disable Syntax Highlighting
+For a reusable buffer that caches rendered output, use `Renderer` instead of
+rolling your own `strings.Builder`:
+
+```go
+r := tviewmd.NewRenderer(tviewmd.Options{})
+r.Append(chunk)          // or io.Copy(r, stream)
+text := r.String()       // cheap when nothing new arrived
+r.SetWidth(newWidth)     // re-layout after a terminal resize
+r.SetOptions(opts)       // change theme/spacing without losing source
+if errors.Is(r.Err(), tviewmd.ErrStreamTooLarge) { /* stream was capped */ }
+```
+
+`Options.MaxStreamBytes` caps accumulated source (default 8 MiB, `-1` for
+unlimited) so a runaway stream cannot make every re-render more expensive.
 
 ### Custom Width
 
@@ -297,7 +312,17 @@ type Theme struct {
 
 // DefaultTheme returns a dark-terminal-friendly theme
 func DefaultTheme() Theme
+
+// WithDefaults fills only the empty fields, so a partial theme keeps the
+// default colors everywhere else.
+func (t Theme) WithDefaults() Theme
+
+// NoColorTheme asks tview to inherit the terminal default everywhere (NO_COLOR).
+func NoColorTheme() Theme
 ```
+
+A theme with only `Link` set now keeps the default heading/rule/code colors;
+previously any partial theme blanked all unspecified colors.
 
 #### Block Types
 
@@ -403,7 +428,7 @@ tviewText := tviewmd.Render("# Hello **world**", tviewmd.Options{})
 Make sure you've enabled wrapping on your TextView:
 
 ```go
-textView := tview.NewTextView().SetWrap(true)  // ✅ Required
+textView := tview.NewTextView().SetWrap(true).SetDynamicColors(true)  // ✅ Both required
 ```
 
 #### Code blocks not colored

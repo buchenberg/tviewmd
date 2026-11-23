@@ -13,9 +13,9 @@ import (
 // tview.TextView configured with SetWrap(true). The output contains tview
 // color tags ([fg:bg:flags] ... [-:-:-]); the TextView performs word-wrapping.
 func RenderTView(blocks []Block, opts Options) string {
-	if opts.Theme == (Theme{}) {
-		opts.Theme = DefaultTheme()
-	}
+	// Per-field defaulting: a partial theme keeps its explicit colors instead
+	// of blanking every field the caller did not set.
+	opts.Theme = opts.Theme.WithDefaults()
 	width := opts.Width
 	if width <= 0 {
 		width = 80
@@ -55,38 +55,89 @@ func renderBlock(b *strings.Builder, blk Block, opts Options, width, depth int) 
 		b.WriteString("\n")
 	case BlockBlockquote:
 		ambient := tag(opts.Theme.QuoteFG, "", "i")
+		// A single inline paragraph is handled by the legacy path: it passes
+		// the quote ambient into renderSegments so the style resumes after an
+		// inline link or code span. Nested rendering is for actual structure.
+		singleParagraph := len(blk.Blocks) == 1 && blk.Blocks[0].Kind == BlockParagraph
+		if !singleParagraph && len(blk.Blocks) > 0 {
+			// Full structure: every child block keeps its own kind (code,
+			// list, table, heading), each line carrying the quote bar.
+			for _, line := range renderNestedLines(blk.Blocks, opts, width, depth) {
+				b.WriteString(ambient)
+				b.WriteString("▎ ")
+				b.WriteString(line)
+				b.WriteString(closeTag())
+				b.WriteString("\n")
+			}
+			break
+		}
+		// Legacy flattened view for hand-built Blocks without Blocks set.
 		b.WriteString(ambient)
 		b.WriteString("▎ ")
 		b.WriteString(renderSegments(blk.Segments, opts, ambient))
 		b.WriteString(closeTag())
 		b.WriteString("\n")
 	case BlockList:
-		renderList(b, blk.Items, opts, depth)
+		renderList(b, blk.Items, opts, width, depth)
 	case BlockTable:
 		renderTable(b, blk.Table, opts)
 	}
 }
 
-func renderList(b *strings.Builder, items []ListItem, opts Options, depth int) {
+// renderNestedLines renders a slice of child blocks into physical lines with
+// no trailing newline. Hand-built Blocks use the legacy flattened fields.
+func renderNestedLines(blocks []Block, opts Options, width, depth int) []string {
+	var tmp strings.Builder
+	for _, child := range blocks {
+		renderBlock(&tmp, child, opts, width, depth)
+	}
+	s := strings.TrimRight(tmp.String(), "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+func renderList(b *strings.Builder, items []ListItem, opts Options, width, depth int) {
 	indent := strings.Repeat("  ", depth)
 	for _, it := range items {
 		marker := "• "
 		if it.Ordered {
 			marker = fmt.Sprintf("%d. ", it.Index)
 		}
+		if lines := renderNestedLines(it.Blocks, opts, width, depth+1); len(lines) > 0 {
+			// The item's first block follows the marker; later blocks and
+			// wrapped continuation lines are indented under it.
+			b.WriteString(indent)
+			b.WriteString(marker)
+			b.WriteString(lines[0])
+			b.WriteString("\n")
+			for _, line := range lines[1:] {
+				if line == "" {
+					b.WriteString("\n")
+					continue
+				}
+				b.WriteString(indent)
+				b.WriteString("  ")
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+			continue
+		}
+		// Legacy inline view: segments plus nested ListItems.
 		b.WriteString(indent)
 		b.WriteString(marker)
 		b.WriteString(renderSegments(it.Segments, opts, ""))
 		b.WriteString("\n")
 		if len(it.Children) > 0 {
-			renderList(b, it.Children, opts, depth+1)
+			renderList(b, it.Children, opts, width, depth+1)
 		}
 	}
 }
 
 func renderCode(cb CodeBlock, opts Options) string {
 	source := strings.TrimRight(cb.Source, "\n")
-	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(source) + closeTag()
+	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(sanitizeText(source)) + closeTag()
 }
 
 // tableBlankLines returns how many blank lines to paint between table body
@@ -847,20 +898,16 @@ func segmentsText(segs []Segment) string {
 	return b.String()
 }
 
-// linkColor returns the theme's link color, falling back to the default theme
-// when opts carries no theme.
+// linkColor returns the link color after per-field theme defaulting.
 func linkColor(opts Options) string {
-	if opts.Theme == (Theme{}) {
-		return DefaultTheme().Link
-	}
-	return opts.Theme.Link
+	return opts.Theme.WithDefaults().Link
 }
 
 // linkDecoration paints the " (url)" suffix shown after a link whose label
 // differs from its target: link color, no label underline, and no trailing
 // style state (the caller resumes any ambient style).
 func linkDecoration(link string, opts Options) string {
-	return " " + tag(linkColor(opts), "", "") + "(" + tview.Escape(link) + ")" + closeTag()
+	return " " + tag(linkColor(opts), "", "") + "(" + tview.Escape(sanitizeText(link)) + ")" + closeTag()
 }
 
 // linkRunEnd returns the index of the last segment in the maximal run of
@@ -907,7 +954,7 @@ func renderStyledRun(s0 Segment, plain bool, raw string, opts Options, ambient s
 	if raw == "" {
 		return ""
 	}
-	text := tview.Escape(raw)
+	text := tview.Escape(sanitizeText(raw))
 	switch {
 	case s0.Link != "":
 		flags := "u"

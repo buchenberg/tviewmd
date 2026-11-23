@@ -19,6 +19,15 @@ var gmd = goldmark.New(goldmark.WithExtensions(extension.GFM))
 // Parse never returns an error for goldmark (markdown is permissive), but the
 // error result is retained for API symmetry with future parser backends.
 func Parse(src string) ([]Block, error) {
+	// Sanitize before parsing: goldmark may split an escape sequence across
+	// inline nodes (ESC becomes its own Text node), so per-segment cleanup
+	// alone cannot recognize the whole sequence. Doing it here also keeps the
+	// source that goldmark measures identical to what the painter will print.
+	return parseSource(sanitizeText(src))
+}
+
+// parseSource parses text that has already been sanitized.
+func parseSource(src string) ([]Block, error) {
 	source := []byte(src)
 	doc := gmd.Parser().Parse(text.NewReader(source))
 	var blocks []Block
@@ -39,17 +48,24 @@ func parseBlock(n gast.Node, source []byte) []Block {
 	case *gast.ThematicBreak:
 		return []Block{{Kind: BlockThematicBreak}}
 	case *gast.FencedCodeBlock:
-		return []Block{{Kind: BlockCodeBlock, Code: fencedCode(v, source)}}
+		code := fencedCode(v, source)
+		code.Source = sanitizeText(code.Source)
+		return []Block{{Kind: BlockCodeBlock, Code: code}}
 	case *gast.CodeBlock:
-		return []Block{{Kind: BlockCodeBlock, Code: CodeBlock{Source: string(v.Lines().Value(source))}}}
+		code := CodeBlock{Source: sanitizeText(string(v.Lines().Value(source)))}
+		return []Block{{Kind: BlockCodeBlock, Code: code}}
 	case *gast.Blockquote:
-		return []Block{{Kind: BlockBlockquote, Segments: collectBlockquote(v, source)}}
+		return []Block{{
+			Kind:     BlockBlockquote,
+			Segments: collectBlockquote(v, source), // legacy flattened view
+			Blocks:   parseChildren(v, source),     // full nested structure
+		}}
 	case *gast.List:
 		return []Block{{Kind: BlockList, Items: parseList(v, source)}}
 	case *extast.Table:
 		return []Block{{Kind: BlockTable, Table: parseTable(v, source)}}
 	case *gast.HTMLBlock:
-		return []Block{{Kind: BlockParagraph, Segments: []Segment{{Text: string(htmlBlockText(v, source))}}}}
+		return []Block{{Kind: BlockParagraph, Segments: []Segment{{Text: sanitizeText(string(htmlBlockText(v, source)))}}}}
 	}
 	return nil
 }
@@ -61,6 +77,17 @@ func fencedCode(v *gast.FencedCodeBlock, source []byte) CodeBlock {
 		lang = string(l)
 	}
 	return CodeBlock{Lang: lang, Source: strings.TrimRight(string(v.Lines().Value(source)), "\n")}
+}
+
+// parseChildren maps every block child of n into Blocks. Unlike the legacy
+// inline flatteners, this keeps code fences, lists, tables and nested quotes
+// as typed blocks instead of silently dropping them.
+func parseChildren(n gast.Node, source []byte) []Block {
+	var blocks []Block
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		blocks = append(blocks, parseBlock(c, source)...)
+	}
+	return blocks
 }
 
 // collectBlockquote flattens a blockquote's block children into inline segments,
@@ -91,7 +118,7 @@ func parseList(list *gast.List, source []byte) []ListItem {
 		idx = list.Start
 	}
 	for li := list.FirstChild(); li != nil; li = li.NextSibling() {
-		item := ListItem{Ordered: list.IsOrdered(), Index: idx}
+		item := ListItem{Ordered: list.IsOrdered(), Index: idx, Blocks: parseChildren(li, source)}
 		for c := li.FirstChild(); c != nil; c = c.NextSibling() {
 			if sub, ok := c.(*gast.List); ok {
 				item.Children = append(item.Children, parseList(sub, source)...)
@@ -173,6 +200,13 @@ func collectInline(n gast.Node, source []byte, base Style) []Segment {
 	var segs []Segment
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		segs = append(segs, inlineNode(c, source, base)...)
+	}
+	// Sanitize here so every downstream consumer -- painters, width measurement,
+	// table planning -- sees the same text. Sanitizing only at paint time would
+	// make painted widths disagree with planned column widths.
+	for i := range segs {
+		segs[i].Text = sanitizeText(segs[i].Text)
+		segs[i].Link = sanitizeText(segs[i].Link)
 	}
 	return segs
 }
