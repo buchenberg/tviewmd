@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.4.0] - 2026-11-23
+
 ### Changed
 
 - Tables now paint one blank line between body rows by default; pass `CompactTableRows` as `Options.TableRowSpacing` for the dense layout. Consumers that count painted rows must account for these spacer lines (`RenderLines` includes them).
@@ -45,5 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run the fuzz target in its package instead of `./...`.
 - Satisfy golangci-lint v2 on the preview CLI and render path.
 
-[Unreleased]: https://github.com/buchenberg/tviewmd/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/buchenberg/tviewmd/compare/v0.4.0...HEAD
+[v0.4.0]: https://github.com/buchenberg/tviewmd/releases/tag/v0.4.0
 [v0.3.1]: https://github.com/buchenberg/tviewmd/releases/tag/v0.3.1
