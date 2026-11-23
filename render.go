@@ -47,7 +47,19 @@ type Options struct {
 
 	// Theme is the color theme. The zero value uses DefaultTheme().
 	Theme Theme
+
+	// TableRowSpacing is the number of blank lines painted between table body
+	// rows. The zero value uses one blank line, which makes row breaks legible
+	// in a tview.TextView; -1 selects the compact layout with no blank lines;
+	// larger positive values add that many blank lines. Spacing is applied
+	// between logical rows only -- never after the last row, so Render's
+	// trailing-newline trimming is unaffected.
+	TableRowSpacing int
 }
+
+// CompactTableRows disables blank lines between table rows. Pass it as
+// Options.TableRowSpacing to get the pre-spacing, dense table layout.
+const CompactTableRows = -1
 
 // Render parses src and renders it to tview color-tagged text. It is the
 // convenience entry point for callers that do not need the intermediate []Block.

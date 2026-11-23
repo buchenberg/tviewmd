@@ -257,7 +257,18 @@ type Options struct {
 
     // Custom color theme (default: DefaultTheme())
     Theme Theme
+
+    // Blank lines between table body rows (default: 1).
+    // Use tviewmd.CompactTableRows (-1) for the dense layout with none.
+    TableRowSpacing int
 }
+```
+
+Tables get one blank line between body rows by default so row breaks stay
+visible in a `tview.TextView`. To restore the dense pre-spacing layout:
+
+```go
+out := tviewmd.Render(markdown, tviewmd.Options{TableRowSpacing: tviewmd.CompactTableRows})
 ```
 
 #### Theme

@@ -791,12 +791,22 @@ func TestRenderTableAlignsWithEmoji(t *testing.T) {
 	for _, table := range tables {
 		out := Render(table.src, Options{Width: 60})
 		widths := screenRowWidths(t, out, 80, 8)
-		// Rows 0-3 are header, separator, and two body rows; the rest are blank.
-		for row := 0; row < 4; row++ {
+		// Header, separator and two body rows, with a blank spacer line between
+		// the body rows. Skip the spacers; every painted row must still match
+		// the column width.
+		painted := 0
+		for row := 0; row < len(widths) && painted < 4; row++ {
+			if widths[row] == 0 {
+				continue
+			}
 			if widths[row] != wantCols {
 				t.Errorf("%s table row %d is %d columns wide, want %d (ragged borders):\n%s",
 					table.name, row, widths[row], wantCols, out)
 			}
+			painted++
+		}
+		if painted != 4 {
+			t.Errorf("%s table painted %d non-blank rows, want 4:\n%s", table.name, painted, out)
 		}
 	}
 }

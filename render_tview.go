@@ -89,6 +89,22 @@ func renderCode(cb CodeBlock, opts Options) string {
 	return tag(opts.Theme.CodeBlockFG, "", "") + tview.Escape(source) + closeTag()
 }
 
+// tableBlankLines returns how many blank lines to paint between table body
+// rows. The zero value of Options selects one; CompactTableRows (-1) selects
+// none; positive values are used verbatim.
+func tableBlankLines(opts Options) int {
+	switch {
+	case opts.TableRowSpacing == CompactTableRows:
+		return 0
+	case opts.TableRowSpacing < 0:
+		return 0
+	case opts.TableRowSpacing == 0:
+		return 1
+	default:
+		return opts.TableRowSpacing
+	}
+}
+
 // renderTable paints a table: the bold header row, the separator, then the
 // body. Column widths come from the max-content plan or, when Options.Width
 // constrains it, from the wrapped layout below.
@@ -130,8 +146,11 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 	}
 	b.WriteString(closeTag())
 	b.WriteString("\n")
-	// Body.
-	for _, row := range t.Rows {
+	// Body. Rows are separated by blank lines so the row breaks stay visible
+	// when the TextView is tall or the table is dense; the last row gets no
+	// trailing gap.
+	gap := strings.Repeat("\n", tableBlankLines(opts))
+	for i, row := range t.Rows {
 		padded := make([]TableCell, cols)
 		for i := 0; i < cols; i++ {
 			if i < len(row) {
@@ -140,6 +159,9 @@ func renderTable(b *strings.Builder, t TableData, opts Options) {
 		}
 		b.WriteString(renderTableRow(padded, widths, opts, ""))
 		b.WriteString("\n")
+		if i < len(t.Rows)-1 {
+			b.WriteString(gap)
+		}
 	}
 }
 
@@ -349,14 +371,18 @@ func renderTableWrapped(b *strings.Builder, t TableData, widths []int, opts Opti
 	}
 	b.WriteString(closeTag())
 	b.WriteString("\n")
-	for _, row := range t.Rows {
+	gap := strings.Repeat("\n", tableBlankLines(opts))
+	for i, row := range t.Rows {
 		padded := make([]TableCell, cols)
-		for i := 0; i < cols && i < len(row); i++ {
-			padded[i] = row[i]
+		for j := 0; j < cols && j < len(row); j++ {
+			padded[j] = row[j]
 		}
 		for _, line := range renderWrappedRow(padded, widths, opts, "") {
 			b.WriteString(line)
 			b.WriteString("\n")
+		}
+		if i < len(t.Rows)-1 {
+			b.WriteString(gap)
 		}
 	}
 }
