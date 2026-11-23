@@ -1,6 +1,10 @@
 package tviewmd
 
-import "github.com/rivo/tview"
+import (
+	"strings"
+
+	"github.com/rivo/tview"
+)
 
 // Theme holds the color scheme used by renderers. Colors are expressed in any
 // form the target backend understands (tview accepts named colors like "red",
@@ -31,6 +35,62 @@ func DefaultTheme() Theme {
 	}
 }
 
+// WithDefaults fills each empty color field of t from DefaultTheme, leaving
+// explicitly set fields untouched. Defaulting is per field, not per struct: a
+// theme that changes only Link keeps the default heading, code and rule colors.
+func (t Theme) WithDefaults() Theme {
+	d := DefaultTheme()
+	for i := range t.Heading {
+		if t.Heading[i] == "" {
+			t.Heading[i] = d.Heading[i]
+		}
+	}
+	if t.Link == "" {
+		t.Link = d.Link
+	}
+	if t.InlineCodeFG == "" {
+		t.InlineCodeFG = d.InlineCodeFG
+	}
+	if t.InlineCodeBG == "" {
+		t.InlineCodeBG = d.InlineCodeBG
+	}
+	if t.CodeBlockFG == "" {
+		t.CodeBlockFG = d.CodeBlockFG
+	}
+	if t.QuoteFG == "" {
+		t.QuoteFG = d.QuoteFG
+	}
+	if t.Hr == "" {
+		t.Hr = d.Hr
+	}
+	return t
+}
+
+// NoColorTheme returns a theme that asks tview to inherit the terminal's
+// default color everywhere. It is the hook for NO_COLOR environments and
+// monochrome terminals, which cannot be expressed with the zero Theme (that
+// value means "use DefaultTheme").
+// inheritColor is tview's name for the terminal's default color.
+const inheritColor = "default"
+
+// NoColorTheme returns a theme that asks tview to inherit the terminal's
+// default color everywhere. It is the hook for NO_COLOR environments and
+// monochrome terminals, which cannot be expressed with the zero Theme.
+func NoColorTheme() Theme {
+	t := Theme{
+		Link:         inheritColor,
+		InlineCodeFG: inheritColor,
+		InlineCodeBG: inheritColor,
+		CodeBlockFG:  inheritColor,
+		QuoteFG:      inheritColor,
+		Hr:           inheritColor,
+	}
+	for i := range t.Heading {
+		t.Heading[i] = inheritColor
+	}
+	return t
+}
+
 // Options configure rendering. The zero value renders with the default theme
 // and an 80-column width for rules; tables use max-content column widths
 // unless Width constrains them.
@@ -47,7 +107,31 @@ type Options struct {
 
 	// Theme is the color theme. The zero value uses DefaultTheme().
 	Theme Theme
+
+	// TableRowSpacing is the number of blank lines painted between table body
+	// rows. The zero value uses one blank line, which makes row breaks legible
+	// in a tview.TextView; -1 selects the compact layout with no blank lines;
+	// larger positive values add that many blank lines. Spacing is applied
+	// between logical rows only -- never after the last row, so Render's
+	// trailing-newline trimming is unaffected. Values above 64 are clamped.
+	TableRowSpacing int
+
+	// MaxStreamBytes bounds how much raw source a Renderer accumulates.
+	// Zero uses DefaultMaxStreamBytes (8 MiB); -1 means unlimited. Render and
+	// RenderBytes ignore it -- it exists to stop a runaway token stream from
+	// growing the buffer and making every String() re-render ever more
+	// expensive.
+	MaxStreamBytes int
 }
+
+// CompactTableRows disables blank lines between table rows. Pass it as
+// Options.TableRowSpacing to get the pre-spacing, dense table layout.
+const CompactTableRows = -1
+
+// DefaultMaxStreamBytes is the stream cap used when Options.MaxStreamBytes is
+// zero. It is deliberately generous: a runaway-stream guard, not a normal
+// response limit.
+const DefaultMaxStreamBytes = 8 << 20
 
 // Render parses src and renders it to tview color-tagged text. It is the
 // convenience entry point for callers that do not need the intermediate []Block.
@@ -67,4 +151,21 @@ func Render(src string, opts Options) string {
 		return ""
 	}
 	return RenderTView(blocks, opts)
+}
+
+// RenderLines renders src and returns its planned physical lines, including
+// the blank spacer lines between table rows. It is a convenience for consumers
+// that need a row count (for example a TUI anchoring a prompt below a message)
+// without re-wrapping the already-planned output.
+//
+// With a positive Options.Width, tables are planned to fit that budget, so the
+// returned lines are the rows a TextView at that width paints. With Width 0 the
+// TextView may wrap further; callers that need an exact painted count must set
+// Width or use a SimulationScreen.
+func RenderLines(src string, opts Options) []string {
+	out := Render(src, opts)
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
 }

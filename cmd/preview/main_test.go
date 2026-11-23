@@ -71,3 +71,41 @@ func TestPaintWideGlyphHasNoPhantomSpace(t *testing.T) {
 		t.Errorf("paint(\"界X\") = %q, want %q", rows, "界X")
 	}
 }
+
+func TestSamplesPaintWithoutTagLeaks(t *testing.T) {
+	for _, s := range samples() {
+		t.Run(s.name, func(t *testing.T) {
+			lines := paint(s.src, 80, 24)
+			if len(lines) == 0 {
+				t.Fatal("sample painted no lines")
+			}
+			painted := strings.Join(lines, "\n")
+			if strings.Contains(painted, "[-:-:-]") || strings.Contains(painted, "[::") {
+				t.Errorf("tview tag rendered literally:\n%s", painted)
+			}
+		})
+	}
+}
+
+func TestRunExitCodes(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := run([]string{"80", "small"}, &out, &errOut); code != 0 {
+		t.Errorf("successful run exited %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "=== small ===") {
+		t.Errorf("sample heading missing: %q", out.String())
+	}
+
+	errOut.Reset()
+	out.Reset()
+	if code := run([]string{"no-such-sample"}, &out, &errOut); code != 1 {
+		t.Errorf("no-match run exited %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "no sample matched") {
+		t.Errorf("no-match diagnostic missing: %q", errOut.String())
+	}
+
+	if code := run([]string{"0"}, &out, &errOut); code != 2 {
+		t.Errorf("bad width exited %d, want 2", code)
+	}
+}

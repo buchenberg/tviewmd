@@ -1,0 +1,2 @@
+go test fuzz v1
+string("plain \u001b[31mred\u001b[0m text")

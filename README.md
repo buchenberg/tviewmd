@@ -14,7 +14,9 @@ model, then emits **tview color tags** directly.
 tview apps today render markdown via `glamour`, which produces ANSI that must be
 re-parsed into tview tags with `tview.TranslateANSI`. That hop is lossy, wasteful,
 and glamour's block backgrounds clash with tview widgets. `tviewmd` emits tview
-tags natively so a `TextView.SetWrap(true)` just works.
+tags natively, so a `TextView` with `SetWrap(true)` **and**
+`SetDynamicColors(true)` just works — tview disables dynamic colors by default,
+so without the second call the tags render as literal text.
 
 ## Installation
 
@@ -42,7 +44,7 @@ import (
 
 func main() {
     app := tview.NewApplication()
-    tv := tview.NewTextView().SetWrap(true)
+    tv := tview.NewTextView().SetWrap(true).SetDynamicColors(true)
     fmt.Fprint(tv, tviewmd.Render("# Hello\n\nSome **bold** and `code`.", tviewmd.Options{}))
     if err := app.SetRoot(tv, true).Run(); err != nil {
         panic(err)
@@ -57,13 +59,16 @@ func main() {
 Render markdown to a tview TextView:
 
 ```go
-import "github.com/buchenberg/tviewmd"
+import (
+    "github.com/buchenberg/tviewmd"
+    "github.com/rivo/tview"
+)
 
 // Simple rendering with defaults
 output := tviewmd.Render("# Heading\n\nParagraph text.", tviewmd.Options{})
 
 // Render to a TextView
-textView := tview.NewTextView().SetWrap(true)
+textView := tview.NewTextView().SetWrap(true).SetDynamicColors(true)
 textView.SetText(output)
 ```
 
@@ -101,7 +106,6 @@ markdown := "# Title\n\n" +
 
 textView.SetText(tviewmd.Render(markdown, tviewmd.Options{}))
 ```
-```
 
 ### With Custom Theme
 
@@ -125,7 +129,8 @@ output := tviewmd.Render(markdown, tviewmd.Options{
 
 ### Streaming LLM Output
 
-For real-time rendering of streaming LLM responses:
+For real-time rendering of streaming LLM responses, the recommended API is
+`Renderer` (see below); the lower-level pattern is:
 
 ```go
 func renderLLMStream(app *tview.Application, stream <-chan []byte, textView *tview.TextView) {
@@ -155,7 +160,7 @@ func renderLLMStream(app *tview.Application, stream <-chan []byte, textView *tvi
 // Usage with a mock stream
 func demoStreaming() {
     app := tview.NewApplication()
-    textView := tview.NewTextView().SetWrap(true)
+    textView := tview.NewTextView().SetWrap(true).SetDynamicColors(true)
     
     // Simulate streaming
     stream := make(chan []byte)
@@ -186,7 +191,29 @@ func demoStreaming() {
 }
 ```
 
-### Disable Syntax Highlighting
+For a reusable buffer that caches rendered output, use `Renderer` instead of
+rolling your own `strings.Builder`:
+
+```go
+r := tviewmd.NewRenderer(tviewmd.Options{})
+r.Append(string(chunk))  // Append takes a string; io.Copy(r, stream) also works
+text := r.String()       // cached until new input or options change
+r.SetWidth(newWidth)     // resize hook: changes only Options.Width
+r.SetOptions(opts)       // replaces all Options; accumulated source is kept
+src := r.Source()        // raw markdown accumulated so far
+if errors.Is(r.Err(), tviewmd.ErrStreamTooLarge) { /* stream was capped */ }
+r.Reset()                // clears source, output and Err; keeps options
+```
+
+`SetOptions` and `SetWidth` take effect on the next `String()` call and never
+discard the buffered source. `Err` is sticky until `Reset`. A `Renderer` is safe
+for concurrent use; flush from a `QueueUpdateDraw` callback on the tview event
+loop and assign the result directly (do not queue from inside that callback).
+
+`Options.MaxStreamBytes` caps accumulated source (`DefaultMaxStreamBytes`, 8 MiB,
+when zero; `-1` for unlimited). Input past the cap is dropped, `Err` reports
+`tviewmd.ErrStreamTooLarge`, and the buffered prefix stays renderable. `Render`
+and `RenderTView` ignore this option.
 
 ### Custom Width
 
@@ -194,7 +221,7 @@ Set a custom width for horizontal rules and table sizing:
 
 ```go
 output := tviewmd.Render(markdown, tviewmd.Options{
-    Width: 120, // Default is 80
+    Width: 120, // 0 = 80 for rules, max-content tables; negative unsupported
 })
 ```
 
@@ -235,6 +262,12 @@ for _, block := range blocks {
 output := tviewmd.RenderTView(blocks, tviewmd.Options{})
 ```
 
+Use `PlainText` as above to inspect segment text. When walking parsed blocks,
+remember the AST is a lossy, terminal-oriented view: nested quotes/list items
+live in `Block.Blocks` / `ListItem.Blocks`, images are alt text only (URL
+discarded), raw HTML is literal text, and `AlignDefault` renders like
+`AlignLeft`.
+
 ## API Reference
 
 ### Functions
@@ -244,20 +277,61 @@ output := tviewmd.RenderTView(blocks, tviewmd.Options{})
 | `Render(src string, opts Options) string` | Parse and render markdown to tview tags in one call |
 | `Parse(src string) ([]Block, error)` | Parse markdown into renderer-neutral blocks |
 | `RenderTView(blocks []Block, opts Options) string` | Render parsed blocks to tview tags |
+| `PlainText(segs []Segment) string` | Concatenate segment text without rendering tview tags |
+| `RenderLines(src string, opts Options) []string` | Render and split into planned physical lines (including table spacers) |
 
 ### Types
+
+#### Constants
+
+| Constant | Meaning |
+|----------|---------|
+| `CompactTableRows` | `Options.TableRowSpacing` value that disables blank lines between table rows |
+| `DefaultMaxStreamBytes` | Default `Renderer` stream cap (8 MiB) |
+| `ErrStreamTooLarge` | Reported by `Renderer.Err`/`Write` when the stream cap is hit |
 
 #### Options
 
 ```go
 type Options struct {
-    // Width for horizontal rules and the table layout budget (default: 80).
-    // Tables are planned at render time; re-render on resize.
+    // Width for horizontal rules and the table layout budget. 0 means 80 for
+    // rules and max-content tables. Negative values currently behave like 0
+    // (the table branch applies a budget only when Width > 0); they are
+    // unsupported, so pass 0 or a positive width.
     Width int
 
-    // Custom color theme (default: DefaultTheme())
+    // Custom color theme (zero value: DefaultTheme()).
     Theme Theme
+
+    // Blank lines between table body rows (default: 1).
+    // Use tviewmd.CompactTableRows (-1) for the dense layout with none.
+    TableRowSpacing int
+
+    // Caps source accumulated by a Renderer. 0 uses DefaultMaxStreamBytes
+    // (8 MiB); -1 means unlimited. Ignored by Render.
+    MaxStreamBytes int
 }
+```
+
+Tables get one blank line between body rows by default so row breaks stay
+visible in a `tview.TextView`. To restore the dense pre-spacing layout:
+
+```go
+out := tviewmd.Render(markdown, tviewmd.Options{TableRowSpacing: tviewmd.CompactTableRows})
+```
+
+#### Renderer
+
+`Renderer` is a concurrency-safe streaming buffer. `NewRenderer(opts)` starts
+one; `Append(string)`, `Write([]byte)` (so it implements `io.Writer`), `String`,
+`Source`, `Reset`, `SetOptions`, `SetWidth` and `Err` operate on it.
+
+```go
+r := tviewmd.NewRenderer(tviewmd.Options{})
+r.Append(chunk)
+text := r.String()
+r.SetWidth(width)     // re-layout the buffered source
+r.SetOptions(opts)    // replace all options, keep the source
 ```
 
 #### Theme
@@ -286,7 +360,19 @@ type Theme struct {
 
 // DefaultTheme returns a dark-terminal-friendly theme
 func DefaultTheme() Theme
+
+// WithDefaults fills only the empty fields, so a partial theme keeps the
+// default colors everywhere else.
+func (t Theme) WithDefaults() Theme
+
+// NoColorTheme asks tview to inherit the terminal default everywhere (NO_COLOR).
+func NoColorTheme() Theme
 ```
+
+A theme with only `Link` set keeps the default heading/rule/code colors;
+defaulting is per field, not per struct. A zero `Theme` still means
+`DefaultTheme()`; use `NoColorTheme()` when you want tview's `default` colors
+(NO_COLOR / monochrome terminals).
 
 #### Block Types
 
@@ -300,6 +386,15 @@ type Block struct {
     Code     CodeBlock  // Code block content (for BlockCodeBlock)
     Items    []ListItem // List items (for BlockList)
     Table    TableData  // Table content (for BlockTable)
+    Blocks   []Block    // Nested block children (blockquotes)
+}
+
+type ListItem struct {
+    Segments []Segment
+    Children []ListItem // legacy flattened nested items
+    Blocks   []Block    // full block children of the item
+    Ordered  bool
+    Index    int        // 1-based ordinal for ordered items
 }
 
 type BlockKind int
@@ -315,16 +410,24 @@ const (
 )
 ```
 
+The AST is intentionally lossy: it is a terminal-oriented view, not goldmark's
+full tree. `Block.Blocks` and `ListItem.Blocks` preserve nested code fences,
+tables, lists, headings and multiple paragraphs inside blockquotes and list
+items; the `Segments` / `Children` fields remain the flattened view used by
+hand-built blocks. Images keep only their alt text (the URL is discarded), raw
+HTML is emitted as literal text, and `AlignDefault` renders like `AlignLeft`.
+
 #### Segment Type
 
 Inline content is represented as styled segments:
 
 ```go
 type Segment struct {
-    Text  string  // The text content
-    Style Style   // Rendering style (bold, italic, etc.)
-    Link  string // URL for links (empty if not a link)
-    Code  bool    // true for inline code spans
+    Text   string // The text content
+    Style  Style  // Rendering style (bold, italic, etc.)
+    Link   string // URL for links (empty if not a link)
+    LinkID int    // distinguishes adjacent links with the same URL
+    Code   bool   // true for inline code spans
 }
 
 type Style struct {
@@ -337,6 +440,9 @@ type Style struct {
     Dim           bool
 }
 ```
+
+`tviewmd.PlainText(segs)` returns the concatenated text of a `[]Segment`
+without emitting any tview tags.
 
 ## Design
 
@@ -392,7 +498,7 @@ tviewText := tviewmd.Render("# Hello **world**", tviewmd.Options{})
 Make sure you've enabled wrapping on your TextView:
 
 ```go
-textView := tview.NewTextView().SetWrap(true)  // ✅ Required
+textView := tview.NewTextView().SetWrap(true).SetDynamicColors(true)  // ✅ Both required
 ```
 
 #### Code blocks not colored
@@ -437,7 +543,7 @@ For large markdown documents (>10KB):
    throttle := time.Tick(100 * time.Millisecond)  // Less frequent updates
    ```
 
-3. **Pre-parse** if re-rendering the same content:
+2. **Pre-parse** if re-rendering the same content:
    ```go
    blocks, _ := tviewmd.Parse(markdown)
    // Cache blocks, then render with different options
@@ -452,7 +558,7 @@ Contributions are welcome! Please:
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feat/amazing-feature`)
 3. Add tests for new functionality
-4. Run `make all` to verify everything works
+4. Run `make all` to run the standard checks (test, lint, build)
 5. Commit your changes (`git commit -m 'feat: add amazing feature'`)
 6. Push to the branch (`git push origin feat/amazing-feature`)
 7. Open a Pull Request
@@ -467,7 +573,7 @@ cd tviewmd
 # Install dependencies
 go mod download
 
-# Run all checks
+# Run standard checks (test, lint, build)
 make all
 
 # Or individually:
@@ -478,7 +584,8 @@ make build   # Build project
 
 ## Status
 
-tviewmd is a standalone, production-ready library at `github.com/buchenberg/tviewmd`.
+tviewmd is a standalone library at `github.com/buchenberg/tviewmd` (pre-v1.0;
+see AGENTS.md for the versioning policy).
 
 ## Testing
 
@@ -494,8 +601,8 @@ The project uses GitHub Actions for continuous integration with the following wo
 # Run all tests with race detector
 go test -v -race ./...
 
-# Run fuzz tests
-go test -fuzz=FuzzParse -fuzztime=60s ./...
+# Run fuzz tests (the -fuzz flag targets one package)
+go test -fuzz=FuzzParse -fuzztime=60s .
 
 # Run with coverage
 go test -coverprofile=coverage.out -covermode=atomic ./...
@@ -505,7 +612,7 @@ go tool cover -func=coverage.out
 ### Using Makefile
 
 ```bash
-# Run all checks (test + lint + build)
+# Standard checks (test + lint + build); coverage and fuzz are separate targets
 make all
 
 # Individual targets
@@ -519,7 +626,8 @@ make clean     # Clean build artifacts
 
 ## Linting
 
-The project uses [golangci-lint](https://golangci-lint.run/) with a comprehensive configuration.
+The project uses [golangci-lint](https://golangci-lint.run/) v2 (v2.15.0 in CI)
+with a v2 configuration (`version: "2"`); v1.x cannot read this config.
 
 ```bash
 # Install linter (if not in CI)

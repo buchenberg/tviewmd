@@ -12,36 +12,31 @@ import (
 
 func TestRenderBoldTag(t *testing.T) {
 	out := Render("**hi**", Options{})
-	if !strings.Contains(out, "::b]") {
-		t.Errorf("bold tag missing in %q", out)
-	}
-	if !strings.Contains(out, "hi") {
-		t.Errorf("text missing in %q", out)
+	if !strings.Contains(out, "[::b]hi") {
+		t.Errorf("bold run not painted as one styled span: %q", out)
 	}
 }
 
 func TestRenderItalicTag(t *testing.T) {
 	out := Render("*hi*", Options{})
-	if !strings.Contains(out, "::i]") {
-		t.Errorf("italic tag missing in %q", out)
+	if !strings.Contains(out, "[::i]hi") {
+		t.Errorf("italic run not painted as one styled span: %q", out)
 	}
 }
 
 func TestRenderStrikethroughTag(t *testing.T) {
 	out := Render("~~hi~~", Options{})
-	if !strings.Contains(out, "::s]") {
-		t.Errorf("strike tag missing in %q", out)
+	if !strings.Contains(out, "[::s]hi") {
+		t.Errorf("strikethrough run not painted as one styled span: %q", out)
 	}
 }
 
 func TestRenderInlineCode(t *testing.T) {
 	out := Render("`x`", Options{})
-	// Inline code uses the InlineCodeBG color in the tag.
-	if !strings.Contains(out, "]") {
-		t.Errorf("plain code tag missing in %q", out)
-	}
-	if !strings.Contains(out, "x") {
-		t.Errorf("code text missing in %q", out)
+	d := DefaultTheme()
+	want := "[" + d.InlineCodeFG + ":" + d.InlineCodeBG + ":]x"
+	if !strings.Contains(out, want) {
+		t.Errorf("inline code tag %q missing in %q", want, out)
 	}
 }
 
@@ -116,14 +111,15 @@ func TestRenderLink(t *testing.T) {
 }
 
 func TestRenderTableAlignment(t *testing.T) {
-	src := "| A | B |\n|:--|--:|\n| short | x |\n"
-	out := Render(src, Options{})
-	// Right-aligned column B should left-pad "x" to match header width "B".
-	if !strings.Contains(out, "x") {
-		t.Errorf("cell missing in %q", out)
+	src := "| A | BBB |\n|:--|--:|\n| short | x |\n"
+	out := stripTags(Render(src, Options{TableRowSpacing: CompactTableRows}))
+	// Column B is right-aligned to width 3, so the body cell must be padded
+	// with two leading spaces and the separator must match the column widths.
+	if !strings.Contains(out, "short   x") {
+		t.Errorf("right-aligned body row not padded: %q", out)
 	}
-	if !strings.Contains(out, "─") {
-		t.Errorf("separator missing in %q", out)
+	if !strings.Contains(out, "───── ───") {
+		t.Errorf("separator does not match planned column widths: %q", out)
 	}
 }
 
@@ -791,12 +787,22 @@ func TestRenderTableAlignsWithEmoji(t *testing.T) {
 	for _, table := range tables {
 		out := Render(table.src, Options{Width: 60})
 		widths := screenRowWidths(t, out, 80, 8)
-		// Rows 0-3 are header, separator, and two body rows; the rest are blank.
-		for row := 0; row < 4; row++ {
+		// Header, separator and two body rows, with a blank spacer line between
+		// the body rows. Skip the spacers; every painted row must still match
+		// the column width.
+		painted := 0
+		for row := 0; row < len(widths) && painted < 4; row++ {
+			if widths[row] == 0 {
+				continue
+			}
 			if widths[row] != wantCols {
 				t.Errorf("%s table row %d is %d columns wide, want %d (ragged borders):\n%s",
 					table.name, row, widths[row], wantCols, out)
 			}
+			painted++
+		}
+		if painted != 4 {
+			t.Errorf("%s table painted %d non-blank rows, want 4:\n%s", table.name, painted, out)
 		}
 	}
 }
@@ -892,4 +898,39 @@ func TestRenderHeaderKeepsBoldAfterLink(t *testing.T) {
 				got, baseline, out)
 		}
 	})
+}
+
+// TestRenderMultiParagraphBlockquoteKeepsStyleAfterLink: the nested-block path
+// must resume the quote style after an inline link, just like the legacy
+// single-paragraph path does.
+func TestRenderMultiParagraphBlockquoteKeepsStyleAfterLink(t *testing.T) {
+	baseline, ok := cellStyleForSize(t, Render("> QQQ", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	got, ok := cellStyleForSize(t, Render("> first [link](u) QQQ\n>\n> second", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing trailing sentinel after link in nested quote")
+	}
+	requireAttr(t, "nested quote baseline", baseline, tcell.AttrItalic)
+	if got != baseline {
+		t.Errorf("nested quote style not resumed after link\n got=%#v\nwant=%#v", got, baseline)
+	}
+}
+
+// TestRenderQuoteListKeepsStyleAfterLink: a list nested in a blockquote must
+// resume the quote style after an inline link, like a direct quote paragraph.
+func TestRenderQuoteListKeepsStyleAfterLink(t *testing.T) {
+	baseline, ok := cellStyleForSize(t, Render("> QQQ", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing baseline sentinel")
+	}
+	got, ok := cellStyleForSize(t, Render("> - item [link](u) QQQ\n", Options{}), 'Q', 80, 8)
+	if !ok {
+		t.Fatal("missing trailing sentinel after link in quoted list")
+	}
+	requireAttr(t, "quoted list baseline", baseline, tcell.AttrItalic)
+	if got != baseline {
+		t.Errorf("quoted list style not resumed after link\n got=%#v\nwant=%#v", got, baseline)
+	}
 }

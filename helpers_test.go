@@ -36,12 +36,3 @@ type testingT interface {
 	Helper()
 	Fatalf(format string, args ...any)
 }
-
-func hasSegment(segs []Segment, text string) bool {
-	for _, s := range segs {
-		if strings.Contains(s.Text, text) {
-			return true
-		}
-	}
-	return false
-}

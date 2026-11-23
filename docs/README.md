@@ -39,7 +39,7 @@ See the main [README.md](../README.md) for usage examples.
 
 - Follow existing code style and patterns
 - Add tests for new functionality
-- Document breaking changes in CHANGELOG
+- Document breaking changes in [CHANGELOG.md](../CHANGELOG.md)
 - Use ADRs for significant architectural decisions
 
 ## Building Documentation
@@ -53,4 +53,6 @@ godoc -url "http://localhost:6060" .
 
 ## Version History
 
-See [CHANGELOG.md](../CHANGELOG.md) if it exists, or check Git tags for release history.
+The repository keeps a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+style [CHANGELOG.md](../CHANGELOG.md) at its root, covering released and
+unreleased changes. Git tags carry the release history as well.
